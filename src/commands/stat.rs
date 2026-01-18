@@ -1,0 +1,336 @@
+// Stat command - view immersion statistics
+// Ported from commands/stat.js
+
+use poise::serenity_prelude as serenity;
+use serde_json::Value;
+use tracing::error;
+
+use crate::utils::config::{colors, get_effective_date_string, get_media_label, get_unit};
+use crate::utils::points::calculate_points;
+use crate::{Context, Error};
+
+/// Visualization type choices
+#[derive(Debug, Clone, Copy, poise::ChoiceParameter)]
+pub enum VisualType {
+    #[name = "Bar Chart"]
+    Barchart,
+    #[name = "Heatmap"]
+    Heatmap,
+}
+
+/// Days choice for bar chart
+#[derive(Debug, Clone, Copy, poise::ChoiceParameter)]
+pub enum DaysChoice {
+    #[name = "7 days"]
+    SevenDays = 7,
+    #[name = "30 days"]
+    ThirtyDays = 30,
+}
+
+/// View your immersion statistics
+#[poise::command(slash_command, prefix_command)]
+pub async fn stat(
+    ctx: Context<'_>,
+    #[description = "Pilih jenis visualisasi"]
+    visual_type: Option<VisualType>,
+    #[description = "Periode waktu (7 atau 30 hari)"]
+    _days: Option<DaysChoice>,
+    #[description = "Tahun untuk heatmap (default: tahun ini)"]
+    #[min = 2020]
+    #[max = 2030]
+    _year: Option<i32>,
+) -> Result<(), Error> {
+    ctx.defer().await?;
+
+    let user = ctx.author();
+    let data = ctx.data();
+    let user_id = user.id.to_string();
+
+    // Fetch user data from Firebase
+    let user_doc = match data.firebase.get_document("users", &user_id).await {
+        Ok(doc) => doc,
+        Err(e) => {
+            error!("Failed to fetch user data: {:?}", e);
+            ctx.say("Failed to fetch your data. Please try again.").await?;
+            return Ok(());
+        }
+    };
+
+    // Check if user has data
+    let user_data = match user_doc {
+        Some(doc) => doc,
+        None => {
+            let embed = serenity::CreateEmbed::new()
+                .title(format!("Immersion Stats - {}", user.name))
+                .description("**Total Points: 0** | **Total Sessions: 0**\n\n*Tip: Use `/stat visual_type:barchart` or `/stat visual_type:heatmap` to see visualizations!*")
+                .color(colors::SUCCESS)
+                .field("No data", "Start logging with `/immersion`!", false)
+                .thumbnail(user.face());
+            
+            ctx.send(poise::CreateReply::default().embed(embed)).await?;
+            return Ok(());
+        }
+    };
+
+    // Get stats object
+    let stats = match user_data.get("stats") {
+        Some(s) if s.is_object() => s,
+        _ => {
+            let embed = serenity::CreateEmbed::new()
+                .title(format!("Immersion Stats - {}", user.name))
+                .description("**Total Points: 0** | **Total Sessions: 0**\n\n*Tip: Use `/stat visual_type:barchart` or `/stat visual_type:heatmap` to see visualizations!*")
+                .color(colors::SUCCESS)
+                .field("No data", "Start logging with `/immersion`!", false)
+                .thumbnail(user.face());
+            
+            ctx.send(poise::CreateReply::default().embed(embed)).await?;
+            return Ok(());
+        }
+    };
+
+    // Get profile info
+    let profile = user_data.get("profile");
+    let display_name = profile
+        .and_then(|p| p.get("displayName"))
+        .and_then(|v| v.as_str())
+        .unwrap_or(&user.name);
+    let avatar = profile
+        .and_then(|p| p.get("avatar"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    // Handle visualization types
+    match visual_type {
+        Some(VisualType::Heatmap) => {
+            // TODO: Generate heatmap image
+            let embed = serenity::CreateEmbed::new()
+                .title(format!("Immersion Heatmap - {}", display_name))
+                .description("Heatmap generation coming soon!")
+                .color(colors::INFO);
+
+            ctx.send(poise::CreateReply::default().embed(embed)).await?;
+            return Ok(());
+        }
+        Some(VisualType::Barchart) => {
+            // TODO: Generate bar chart image
+            let embed = serenity::CreateEmbed::new()
+                .title(format!("Immersion Chart - {}", display_name))
+                .description("Chart generation coming soon!")
+                .color(colors::SUCCESS);
+
+            ctx.send(poise::CreateReply::default().embed(embed)).await?;
+            return Ok(());
+        }
+        None => {
+            // Default: show text stats
+        }
+    }
+
+    // Calculate stats
+    let stats_obj = stats.as_object().unwrap();
+    let mut total_points: i64 = 0;
+    let mut total_sessions: i64 = 0;
+    let mut stat_entries: Vec<StatEntry> = Vec::new();
+
+    for (media_type, media_stats) in stats_obj {
+        let total = media_stats.get("total").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let sessions = media_stats.get("sessions").and_then(|v| v.as_i64()).unwrap_or(0);
+
+        if total > 0.0 {
+            let points = calculate_points(media_type, total);
+            total_points += points;
+            total_sessions += sessions;
+
+            stat_entries.push(StatEntry {
+                label: get_media_label(media_type).to_string(),
+                total,
+                unit: get_unit(media_type).to_string(),
+                sessions,
+                points,
+            });
+        }
+    }
+
+    // Sort by points (highest first)
+    stat_entries.sort_by(|a, b| b.points.cmp(&a.points));
+
+    // Calculate streaks
+    let (current_streak, longest_streak) = calculate_user_streaks(&data.firebase, &user_id).await;
+
+    // Build stats text (grouped in one field)
+    let mut stats_text = String::new();
+    for stat in &stat_entries {
+        stats_text.push_str(&format!(
+            "**{}**: {} {}\n",
+            stat.label,
+            format_number_f64(stat.total),
+            stat.unit
+        ));
+    }
+
+    if stats_text.is_empty() {
+        stats_text = "*No data yet*".to_string();
+    }
+
+    // Build embed
+    let mut embed = serenity::CreateEmbed::new()
+        .title(format!("Immersion Stats - {}", display_name))
+        .description(format!(
+            "**{}** pts | **{}** sessions\nStreak: **{}** days | Best: **{}** days",
+            format_number(total_points),
+            total_sessions,
+            current_streak,
+            longest_streak
+        ))
+        .field("Stats", stats_text, false)
+        .color(colors::SUCCESS);
+
+    // Add avatar
+    if let Some(ref avatar_url) = avatar {
+        if !avatar_url.is_empty() {
+            embed = embed.thumbnail(avatar_url);
+        }
+    } else {
+        embed = embed.thumbnail(user.face());
+    }
+
+    ctx.send(poise::CreateReply::default().embed(embed)).await?;
+
+    Ok(())
+}
+
+#[derive(Debug)]
+struct StatEntry {
+    label: String,
+    total: f64,
+    unit: String,
+    sessions: i64,
+    points: i64,
+}
+
+/// Format a number with locale-aware thousands separators
+fn format_number(n: i64) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    let chars: Vec<char> = s.chars().collect();
+
+    for (i, c) in chars.iter().enumerate() {
+        if i > 0 && (chars.len() - i) % 3 == 0 && *c != '-' {
+            result.push(',');
+        }
+        result.push(*c);
+    }
+
+    result
+}
+
+/// Format a float number
+fn format_number_f64(n: f64) -> String {
+    if n == n.trunc() {
+        format_number(n as i64)
+    } else {
+        format!("{:.1}", n)
+    }
+}
+
+use std::collections::HashSet;
+use std::sync::Arc;
+use crate::api::firebase::FirebaseClient;
+use chrono::{Duration, NaiveDate};
+
+/// Calculate user streaks (current and longest) from immersion_logs
+async fn calculate_user_streaks(firebase: &Arc<FirebaseClient>, user_id: &str) -> (i32, i32) {
+    let logs = match firebase.query_subcollection("users", user_id, "immersion_logs").await {
+        Ok(l) => l,
+        Err(_) => return (0, 0),
+    };
+    
+    if logs.is_empty() {
+        return (0, 0);
+    }
+    
+    // Extract unique dates
+    let mut date_set: HashSet<String> = HashSet::new();
+    for log in &logs {
+        if let Some(date_str) = log
+            .get("timestamps")
+            .and_then(|t| t.get("date"))
+            .and_then(|d| d.as_str())
+        {
+            date_set.insert(date_str.to_string());
+        }
+    }
+    
+    if date_set.is_empty() {
+        return (0, 0);
+    }
+    
+    let mut dates: Vec<String> = date_set.into_iter().collect();
+    dates.sort();
+    
+    // Get today's date
+    let today = get_effective_date_string();
+    let today_parsed = match NaiveDate::parse_from_str(&today, "%Y-%m-%d") {
+        Ok(d) => d,
+        Err(_) => return (0, 0),
+    };
+    let yesterday = (today_parsed - Duration::days(1)).format("%Y-%m-%d").to_string();
+    
+    // Calculate current streak
+    let mut current_streak = 0;
+    let mut expected_date = today.clone();
+    
+    for date in dates.iter().rev() {
+        if date == &expected_date {
+            current_streak += 1;
+            if let Ok(parsed) = NaiveDate::parse_from_str(&expected_date, "%Y-%m-%d") {
+                expected_date = (parsed - Duration::days(1)).format("%Y-%m-%d").to_string();
+            }
+        } else if date < &expected_date {
+            break;
+        }
+    }
+    
+    // If no activity today but activity yesterday
+    if current_streak == 0 && dates.contains(&yesterday) {
+        expected_date = yesterday.clone();
+        for date in dates.iter().rev() {
+            if date == &expected_date {
+                current_streak += 1;
+                if let Ok(parsed) = NaiveDate::parse_from_str(&expected_date, "%Y-%m-%d") {
+                    expected_date = (parsed - Duration::days(1)).format("%Y-%m-%d").to_string();
+                }
+            } else if date < &expected_date {
+                break;
+            }
+        }
+    }
+    
+    // Calculate longest streak
+    let mut longest_streak = if dates.is_empty() { 0 } else { 1 };
+    let mut temp_streak = 1;
+    
+    for i in 1..dates.len() {
+        if let (Ok(prev), Ok(curr)) = (
+            NaiveDate::parse_from_str(&dates[i - 1], "%Y-%m-%d"),
+            NaiveDate::parse_from_str(&dates[i], "%Y-%m-%d"),
+        ) {
+            let expected_next = (prev + Duration::days(1)).format("%Y-%m-%d").to_string();
+            if dates[i] == expected_next {
+                temp_streak += 1;
+            } else {
+                if temp_streak > longest_streak {
+                    longest_streak = temp_streak;
+                }
+                temp_streak = 1;
+            }
+        }
+    }
+    
+    if temp_streak > longest_streak {
+        longest_streak = temp_streak;
+    }
+    
+    (current_streak, longest_streak)
+}
+

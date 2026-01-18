@@ -1,0 +1,58 @@
+[package]
+name = "yuyuko-rs"
+version = "0.1.0"
+edition = "2021"
+description = "A lightweight Discord bot for Japanese immersion tracking"
+authors = ["nexsal"]
+
+[dependencies]
+# Discord
+serenity = { version = "0.12", default-features = false, features = [
+    "client",
+    "gateway",
+    "model",
+    "rustls_backend",
+    "cache"
+] }
+poise = "0.6"  # Command framework for serenity
+
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+
+# HTTP client
+reqwest = { version = "0.11", default-features = false, features = [
+    "json",
+    "rustls-tls"
+] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Environment
+dotenvy = "0.15"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Image generation (for heatmap/charts)
+image = "0.25"
+imageproc = "0.24"
+rusttype = "0.9"
+
+# Utilities
+anyhow = "1"  # Error handling
+thiserror = "1"  # Custom errors
+jsonwebtoken = "9"  # JWT for Firebase auth
+base64 = "0.22"  # Base64 encoding
+
+[profile.release]
+opt-level = "z"     # Optimize for size
+lto = true          # Link-time optimization
+codegen-units = 1   # Better optimization
+panic = "abort"     # Smaller binary
+strip = true        # Strip symbols

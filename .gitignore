@@ -1,0 +1,8 @@
+target/
+**/*.rs.bk
+.env
+firebase-key.json
+.vscode/
+.idea/
+*.swp
+*.iml
