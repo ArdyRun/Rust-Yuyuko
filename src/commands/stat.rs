@@ -7,7 +7,9 @@ use tracing::error;
 
 use crate::utils::config::{colors, get_effective_date_string, get_media_label, get_unit};
 use crate::utils::points::calculate_points;
+use crate::utils::visualizations::{generate_heatmap, generate_bar_chart, BarData};
 use crate::{Context, Error};
+use chrono::Datelike;
 
 /// Visualization type choices
 #[derive(Debug, Clone, Copy, poise::ChoiceParameter)]
@@ -102,23 +104,161 @@ pub async fn stat(
     // Handle visualization types
     match visual_type {
         Some(VisualType::Heatmap) => {
-            // TODO: Generate heatmap image
-            let embed = serenity::CreateEmbed::new()
-                .title(format!("Immersion Heatmap - {}", display_name))
-                .description("Heatmap generation coming soon!")
-                .color(colors::INFO);
-
-            ctx.send(poise::CreateReply::default().embed(embed)).await?;
+            // Get immersion logs to calculate daily points
+            let logs = match data.firebase.query_subcollection("users", &user_id, "immersion_logs").await {
+                Ok(l) => l,
+                Err(e) => {
+                    error!("Failed to fetch logs for heatmap: {:?}", e);
+                    ctx.say("Failed to generate heatmap.").await?;
+                    return Ok(());
+                }
+            };
+            
+            // Aggregate points by date - calculate from activity data
+            let mut daily_points: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+            for log in &logs {
+                // Get date from timestamps.date
+                let date = log.get("timestamps")
+                    .and_then(|t| t.get("date"))
+                    .and_then(|d| d.as_str());
+                
+                // Get activity type and amount to calculate points
+                let activity = log.get("activity");
+                let media_type = activity.and_then(|a| a.get("type")).and_then(|t| t.as_str());
+                let amount = activity.and_then(|a| a.get("amount")).and_then(|a| a.as_f64());
+                
+                if let (Some(date), Some(media_type), Some(amount)) = (date, media_type, amount) {
+                    let points = calculate_points(media_type, amount);
+                    *daily_points.entry(date.to_string()).or_insert(0) += points;
+                }
+            }
+            
+            // Debug: log how many entries we found
+            tracing::debug!("Heatmap: Found {} logs, {} unique dates with {} total points", 
+                logs.len(), daily_points.len(), daily_points.values().sum::<i64>());
+            
+            let year = _year.unwrap_or_else(|| chrono::Utc::now().year());
+            
+            match generate_heatmap(&daily_points, year, display_name) {
+                Ok(png_bytes) => {
+                    let attachment = serenity::CreateAttachment::bytes(png_bytes, "heatmap.png");
+                    let embed = serenity::CreateEmbed::new()
+                        .title(format!("Immersion Heatmap {} - {}", year, display_name))
+                        .color(colors::SUCCESS)
+                        .image("attachment://heatmap.png");
+                    
+                    ctx.send(poise::CreateReply::default().embed(embed).attachment(attachment)).await?;
+                }
+                Err(e) => {
+                    error!("Heatmap generation failed: {}", e);
+                    ctx.say("Failed to generate heatmap image.").await?;
+                }
+            }
             return Ok(());
         }
         Some(VisualType::Barchart) => {
-            // TODO: Generate bar chart image
-            let embed = serenity::CreateEmbed::new()
-                .title(format!("Immersion Chart - {}", display_name))
-                .description("Chart generation coming soon!")
-                .color(colors::SUCCESS);
-
-            ctx.send(poise::CreateReply::default().embed(embed)).await?;
+            // Get days filter (default to all-time if not specified)
+            let days_filter = _days.map(|d| d as i64);
+            
+            // Calculate date threshold for filtering
+            let cutoff_date = days_filter.map(|d| {
+                let now = chrono::Utc::now();
+                (now - chrono::Duration::days(d)).format("%Y-%m-%d").to_string()
+            });
+            
+            // Fetch immersion logs
+            let logs = match data.firebase.query_subcollection("users", &user_id, "immersion_logs").await {
+                Ok(l) => l,
+                Err(e) => {
+                    error!("Failed to fetch logs for barchart: {:?}", e);
+                    ctx.say("Failed to generate chart.").await?;
+                    return Ok(());
+                }
+            };
+            
+            // Aggregate points by media type with date filter
+            let mut media_points: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+            
+            for log in &logs {
+                // Get date from timestamps.date
+                let date = log.get("timestamps")
+                    .and_then(|t| t.get("date"))
+                    .and_then(|d| d.as_str());
+                
+                // Apply date filter if specified
+                if let Some(ref cutoff) = cutoff_date {
+                    if let Some(log_date) = date {
+                        if log_date < cutoff.as_str() {
+                            continue; // Skip logs before cutoff
+                        }
+                    }
+                }
+                
+                // Get activity type and amount
+                let activity = log.get("activity");
+                let media_type = activity.and_then(|a| a.get("type")).and_then(|t| t.as_str());
+                let amount = activity.and_then(|a| a.get("amount")).and_then(|a| a.as_f64());
+                
+                if let (Some(media_type), Some(amount)) = (media_type, amount) {
+                    let points = calculate_points(media_type, amount) as f64;
+                    *media_points.entry(media_type.to_string()).or_insert(0.0) += points;
+                }
+            }
+            
+            // All supported media types - initialize with 0
+            let all_media_types = [
+                "anime", "listening", "reading", "manga", "visual_novel", "book", "reading_time"
+            ];
+            for mt in &all_media_types {
+                media_points.entry(mt.to_string()).or_insert(0.0);
+            }
+            
+            // Build bar chart data (include all, even 0 values)
+            let mut bar_data: Vec<BarData> = media_points.iter()
+                .map(|(media_type, &value)| BarData {
+                    label: get_media_label(media_type).to_string(),
+                    value,
+                    media_type: media_type.clone(),
+                })
+                .collect();
+            
+            // Sort by value descending
+            bar_data.sort_by(|a, b| b.value.partial_cmp(&a.value).unwrap_or(std::cmp::Ordering::Equal));
+            
+            // Check if there's ANY data at all
+            let has_any_data = bar_data.iter().any(|d| d.value > 0.0);
+            if !has_any_data {
+                let period_text = match days_filter {
+                    Some(7) => "last 7 days",
+                    Some(30) => "last 30 days",
+                    _ => "all time",
+                };
+                ctx.say(format!("No immersion data found for {}.", period_text)).await?;
+                return Ok(());
+            }
+            
+            // Create title with period info
+            let title = match days_filter {
+                Some(7) => format!("Stats (7 Days) - {}", display_name),
+                Some(30) => format!("Stats (30 Days) - {}", display_name),
+                _ => format!("Stats - {}", display_name),
+            };
+            
+            match generate_bar_chart(&bar_data, &title, "Points") {
+                Ok(png_bytes) => {
+                    let attachment = serenity::CreateAttachment::bytes(png_bytes, "chart.png");
+                    let embed = serenity::CreateEmbed::new()
+                        .title(format!("Immersion Chart - {}", display_name))
+                        .color(colors::SUCCESS)
+                        .image("attachment://chart.png");
+                    
+                    ctx.send(poise::CreateReply::default().embed(embed).attachment(attachment)).await?;
+                }
+                Err(e) => {
+                    error!("Bar chart generation failed: {}", e);
+                    ctx.say("Failed to generate chart image.").await?;
+                }
+            }
             return Ok(());
         }
         None => {

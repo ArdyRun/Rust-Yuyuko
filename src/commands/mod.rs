@@ -4,3 +4,5 @@ pub mod stat;
 pub mod leaderboard;
 pub mod log;
 pub mod help;
+pub mod config;
+pub mod register;

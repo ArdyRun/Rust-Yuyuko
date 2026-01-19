@@ -5,6 +5,7 @@ mod commands;
 mod api;
 mod models;
 mod utils;
+mod features;
 
 use std::env;
 use std::sync::Arc;
@@ -12,6 +13,9 @@ use std::sync::Arc;
 use poise::serenity_prelude as serenity;
 use tracing::{info, error};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use dashmap::DashMap;
+
+use crate::models::guild::GuildConfig;
 
 use crate::api::firebase::FirebaseClient;
 
@@ -19,6 +23,7 @@ use crate::api::firebase::FirebaseClient;
 pub struct Data {
     pub http_client: reqwest::Client,
     pub firebase: Arc<FirebaseClient>,
+    pub guild_configs: Arc<DashMap<String, GuildConfig>>,
 }
 
 // Manual Debug impl since FirebaseClient doesn't impl Debug
@@ -27,6 +32,7 @@ impl std::fmt::Debug for Data {
         f.debug_struct("Data")
             .field("http_client", &"reqwest::Client")
             .field("firebase", &"FirebaseClient")
+            .field("guild_configs", &"DashMap")
             .finish()
     }
 }
@@ -42,6 +48,8 @@ fn get_commands() -> Vec<poise::Command<Data, Error>> {
         commands::leaderboard::leaderboard(),
         commands::log::log(),
         commands::help::help(),
+        commands::config::config(),
+        commands::register::register(),
     ]
 }
 
@@ -61,6 +69,7 @@ async fn main() {
     let token = env::var("DISCORD_TOKEN").expect("DISCORD_TOKEN must be set");
     let firebase_project_id = env::var("FIREBASE_PROJECT_ID")
         .unwrap_or_else(|_| "yuyuko-bot".to_string());
+    let owner_id = env::var("BOT_OWNER_ID").ok();
 
     info!("Starting Yuyuko Bot (Rust Edition)...");
 
@@ -74,12 +83,22 @@ async fn main() {
     let firebase = FirebaseClient::from_file(http_client.clone(), "firebase-key.json")
         .expect("Failed to load Firebase credentials");
     let firebase = Arc::new(firebase);
+    let guild_configs = Arc::new(DashMap::new());
     info!("Firebase client initialized");
 
     // Setup framework
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
             commands: get_commands(),
+            owners: if let Some(id) = owner_id.clone() {
+                let mut owners = std::collections::HashSet::new();
+                if let Ok(uid) = id.parse() {
+                    owners.insert(uid);
+                }
+                owners
+            } else {
+                Default::default()
+            },
             prefix_options: poise::PrefixFrameworkOptions {
                 prefix: Some("y!".into()),
                 ..Default::default()
@@ -97,17 +116,38 @@ async fn main() {
                     }
                 })
             },
+            event_handler: |ctx, event, _framework, data| {
+                Box::pin(async move {
+                    if let serenity::FullEvent::Message { new_message } = event {
+                        if let Err(e) = features::ayumi::handle_message(ctx, new_message, data).await {
+                            error!("Error in Ayumi handler: {:?}", e);
+                        }
+                    }
+                    Ok(())
+                })
+            },
             ..Default::default()
         })
         .setup(|ctx, _ready, framework| {
             Box::pin(async move {
-                info!("Bot is ready! Registering commands...");
-                poise::builtins::register_globally(ctx, &framework.options().commands).await?;
-                info!("Commands registered successfully!");
+                info!("Bot is ready!");
+
+                // Register in all guilds (Instant updates)
+                for guild in &_ready.guilds {
+                    let guild_id = guild.id;
+                    info!("Registering commands in guild: {}", guild_id);
+                    if let Err(e) = poise::builtins::register_in_guild(ctx, &framework.options().commands, guild_id).await {
+                        error!("Failed to register commands in guild {}: {:?}", guild_id, e);
+                    }
+                }
                 
+                // Also register globally as a fallback
+                // poise::builtins::register_globally(ctx, &framework.options().commands).await?;
+
                 Ok(Data {
                     http_client,
                     firebase,
+                    guild_configs: guild_configs.clone(),
                 })
             })
         })
@@ -115,7 +155,8 @@ async fn main() {
 
     // Build client - note: MESSAGE_CONTENT is privileged, enable in Discord Dev Portal if needed
     let intents = serenity::GatewayIntents::GUILDS
-        | serenity::GatewayIntents::GUILD_MESSAGES;
+        | serenity::GatewayIntents::GUILD_MESSAGES
+        | serenity::GatewayIntents::MESSAGE_CONTENT;
 
     let mut client = serenity::ClientBuilder::new(token, intents)
         .framework(framework)
