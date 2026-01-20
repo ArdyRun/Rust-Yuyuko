@@ -6,3 +6,5 @@ pub mod log;
 pub mod help;
 pub mod config;
 pub mod register;
+pub mod novel;
+pub mod afk;

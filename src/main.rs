@@ -50,6 +50,8 @@ fn get_commands() -> Vec<poise::Command<Data, Error>> {
         commands::help::help(),
         commands::config::config(),
         commands::register::register(),
+        commands::novel::novel(),
+        commands::afk::afk(),
     ]
 }
 
@@ -119,6 +121,12 @@ async fn main() {
             event_handler: |ctx, event, _framework, data| {
                 Box::pin(async move {
                     if let serenity::FullEvent::Message { new_message } = event {
+                        // Handle AFK status
+                        if let Err(e) = features::afk_handler::handle_afk_message(ctx, new_message).await {
+                            error!("Error in AFK handler: {:?}", e);
+                        }
+                        
+                        // Handle Ayumi AI
                         if let Err(e) = features::ayumi::handle_message(ctx, new_message, data).await {
                             error!("Error in Ayumi handler: {:?}", e);
                         }
