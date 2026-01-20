@@ -52,6 +52,8 @@ fn get_commands() -> Vec<poise::Command<Data, Error>> {
         commands::register::register(),
         commands::novel::novel(),
         commands::afk::afk(),
+        commands::subs::subs(),
+        commands::export::export(),
     ]
 }
 
@@ -110,7 +112,7 @@ async fn main() {
                     match error {
                         poise::FrameworkError::Command { error, ctx, .. } => {
                             error!("Command error: {:?}", error);
-                            let _ = ctx.say(format!("❌ Error: {}", error)).await;
+                            let _ = ctx.say(format!("Error: {}", error)).await;
                         }
                         err => {
                             error!("Framework error: {:?}", err);

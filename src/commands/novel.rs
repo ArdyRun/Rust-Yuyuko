@@ -66,7 +66,7 @@ pub async fn novel(
 
     // Check if novels loaded
     if NOVELS.is_empty() {
-        ctx.say("❌ Gagal memuat data novel. Silakan hubungi administrator.").await?;
+        ctx.say("Gagal memuat data novel. Silakan hubungi administrator.").await?;
         return Ok(());
     }
 
@@ -172,7 +172,7 @@ fn create_embed(results: &[&NovelEntry], page: usize, total: usize) -> serenity:
         .join("\n\n");
 
     serenity::CreateEmbed::new()
-        .title("📚 Hasil Pencarian Light Novel")
+        .title("Hasil Pencarian Light Novel")
         .description(description)
         .color(colors::INFO)
         .footer(serenity::CreateEmbedFooter::new(format!(

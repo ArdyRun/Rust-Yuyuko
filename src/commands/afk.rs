@@ -53,7 +53,7 @@ pub async fn afk(
         .color(colors::INFO)
         .author(serenity::CreateEmbedAuthor::new(&user.name)
             .icon_url(user.avatar_url().unwrap_or_else(|| user.default_avatar_url())))
-        .title("💤 AFK")
+        .title("AFK")
         .description(format!(
             "User lain akan diberitahu kalau kamu sedang AFK.\n**Alasan:** {}",
             reason

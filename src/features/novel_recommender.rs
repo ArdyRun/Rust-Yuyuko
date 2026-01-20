@@ -47,7 +47,7 @@ pub fn recommend_novels(count: usize) -> String {
     let mut rng = rand::thread_rng();
     let selected: Vec<_> = novels.choose_multiple(&mut rng, count).collect();
 
-    let mut response = "📚 **Rekomendasi Novel untukmu:**\n\n".to_string();
+    let mut response = "**Rekomendasi Novel untukmu:**\n\n".to_string();
     for (i, novel) in selected.iter().enumerate() {
         response.push_str(&format!("{}. [{}]({})\n   Format: {} | Size: {}\n\n", 
             i + 1, novel.title, novel.url, novel.format, novel.size));

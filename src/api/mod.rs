@@ -4,3 +4,4 @@ pub mod youtube;
 pub mod anilist;
 pub mod vndb;
 pub mod llm;
+pub mod jimaku;

@@ -23,7 +23,7 @@ pub async fn handle_afk_message(
                 .color(0x2ecc71) // Green
                 .author(serenity::CreateEmbedAuthor::new(&msg.author.name)
                     .icon_url(msg.author.avatar_url().unwrap_or_else(|| msg.author.default_avatar_url())))
-                .title("👋 Selamat Datang Kembali")
+                .title("Selamat Datang Kembali")
                 .description("Status AFK kamu telah dihapus")
                 .timestamp(serenity::Timestamp::now());
 
@@ -53,7 +53,7 @@ pub async fn handle_afk_message(
                 .color(0xe67e22) // Orange
                 .author(serenity::CreateEmbedAuthor::new(&afk_data.username)
                     .icon_url(&afk_data.avatar_url))
-                .title(format!("💤 {} sedang AFK", afk_data.username))
+                .title(format!("{} sedang AFK", afk_data.username))
                 .description(format!(
                     "**Alasan:** {}\n**Sejak:** <t:{}:R>",
                     afk_data.reason,

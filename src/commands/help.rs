@@ -8,42 +8,44 @@ use crate::utils::config::colors;
 #[poise::command(slash_command, prefix_command)]
 pub async fn help(ctx: Context<'_>) -> Result<(), Error> {
     let embed = serenity::CreateEmbed::new()
-        .title("📚 Yuyuko Bot - Help")
+        .title("Yuyuko Bot - Help")
         .description("A lightweight Japanese immersion tracker")
         .color(colors::PRIMARY)
         .field(
-            "📝 Immersion Logging",
+            "Immersion Logging",
             "`/immersion` - Log your immersion activities\n\
             Supported: Anime, Manga, Visual Novel, Book, Reading, Listening",
             false,
         )
         .field(
-            "📊 Statistics",
+            "Statistics",
             "`/stat` - View your stats\n\
             `/stat visual_type:heatmap` - Activity heatmap\n\
-            `/stat visual_type:barchart` - Bar chart",
+            `/stat visual_type:barchart` - Bar chart\n\
+            `/export` - Export logs as text file",
             false,
         )
         .field(
-            "🏆 Community",
+            "Community",
             "`/leaderboard` - View rankings\n\
             `/log time` - View recent logs",
             false,
         )
         .field(
-            "📖 Content",
+            "Content",
             "`/novel` - Search & download light novels\n\
+            `/subs` - Download anime subtitles from Jimaku\n\
             `/afk` - Set your AFK status",
             false,
         )
         .field(
-            "⚙️ Configuration",
+            "Configuration",
             "`/config set` - Configure bot channels\n\
             `/config get` - View current configuration",
             false,
         )
         .field(
-            "💯 Points System",
+            "Points System",
             "• Anime: 13 pts/episode\n\
             • Manga: 0.25 pts/page\n\
             • VN/Reading: 1 pt/~350 chars\n\
