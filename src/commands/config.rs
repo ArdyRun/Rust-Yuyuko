@@ -12,6 +12,8 @@ pub enum ConfigKey {
     AyumiChannel,
     #[name = "Quiz Channel"]
     QuizChannel,
+    #[name = "Quiz Category"]
+    QuizCategory,
 }
 
 /// Manage bot configuration
@@ -65,6 +67,7 @@ pub async fn set(
     match key {
         ConfigKey::AyumiChannel => config.ayumi_channel_id = Some(channel_id.clone()),
         ConfigKey::QuizChannel => config.quiz_channel_id = Some(channel_id.clone()),
+        ConfigKey::QuizCategory => config.quiz_category_id = Some(channel_id.clone()),
     }
 
     // Save back to Firebase
@@ -126,11 +129,13 @@ pub async fn get(ctx: Context<'_>) -> Result<(), Error> {
 
     let ayumi = config.ayumi_channel_id.map(|id| format!("<#{}>", id)).unwrap_or_else(|| "Not set".to_string());
     let quiz = config.quiz_channel_id.map(|id| format!("<#{}>", id)).unwrap_or_else(|| "Not set".to_string());
+    let quiz_cat = config.quiz_category_id.map(|id| format!("<#{}>", id)).unwrap_or_else(|| "Not set".to_string());
 
     let embed = serenity::CreateEmbed::new()
         .title("Server Configuration")
         .field("Ayumi Channel", ayumi, true)
         .field("Quiz Channel", quiz, true)
+        .field("Quiz Category", quiz_cat, true)
         .color(colors::INFO);
 
     ctx.send(poise::CreateReply::default().embed(embed)).await?;

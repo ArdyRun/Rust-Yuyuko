@@ -12,3 +12,4 @@ pub mod subs;
 pub mod export;
 pub mod react;
 pub mod prompt;
+pub mod role_rank;

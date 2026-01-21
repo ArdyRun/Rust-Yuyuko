@@ -7,6 +7,8 @@ pub struct GuildConfig {
     pub ayumi_channel_id: Option<String>,
     /// Channel ID for Quiz events
     pub quiz_channel_id: Option<String>,
+    /// Category ID for Quiz channels
+    pub quiz_category_id: Option<String>,
     /// Channel ID for welcome messages
     pub welcome_channel_id: Option<String>,
 }

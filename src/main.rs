@@ -24,6 +24,7 @@ pub struct Data {
     pub http_client: reqwest::Client,
     pub firebase: Arc<FirebaseClient>,
     pub guild_configs: Arc<DashMap<String, GuildConfig>>,
+    pub role_rank_sessions: Arc<DashMap<serenity::UserId, crate::features::role_rank::QuizSession>>,
 }
 
 // Manual Debug impl since FirebaseClient doesn't impl Debug
@@ -56,6 +57,7 @@ fn get_commands() -> Vec<poise::Command<Data, Error>> {
         commands::export::export(),
         commands::react::react(),
         commands::prompt::prompt(),
+        commands::role_rank::role_rank(),
     ]
 }
 
@@ -90,12 +92,15 @@ async fn main() {
         .expect("Failed to load Firebase credentials");
     let firebase = Arc::new(firebase);
     let guild_configs = Arc::new(DashMap::new());
+    let role_rank_sessions = Arc::new(DashMap::new());
     info!("Firebase client initialized");
 
     // Setup framework
+    let guild_configs_clone = guild_configs.clone();
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
             commands: get_commands(),
+            // ... (rest of options)
             owners: if let Some(id) = owner_id.clone() {
                 let mut owners = std::collections::HashSet::new();
                 if let Ok(uid) = id.parse() {
@@ -146,9 +151,21 @@ async fn main() {
                             error!("Error in AFK handler: {:?}", e);
                         }
                         
+                        // Handle Role Rank Messages (Kotoba Bot listener)
+                        if let Err(e) = features::role_rank::handle_message(ctx, new_message, data).await {
+                             error!("Error in Role Rank message handler: {:?}", e);
+                        }
+
                         // Handle Ayumi AI
                         if let Err(e) = features::ayumi::handle_message(ctx, new_message, data).await {
                             error!("Error in Ayumi handler: {:?}", e);
+                        }
+                    }
+                    else if let serenity::FullEvent::InteractionCreate { interaction } = event {
+                        if let serenity::Interaction::Component(component) = interaction {
+                             if let Err(e) = features::role_rank::handle_interaction(ctx, component, data).await {
+                                  error!("Error in Role Rank interaction handler: {:?}", e);
+                             }
                         }
                     }
                     Ok(())
@@ -156,7 +173,7 @@ async fn main() {
             },
             ..Default::default()
         })
-        .setup(|ctx, _ready, framework| {
+        .setup(move |ctx, _ready, framework| {
             Box::pin(async move {
                 info!("Bot is ready!");
 
@@ -175,7 +192,8 @@ async fn main() {
                 Ok(Data {
                     http_client,
                     firebase,
-                    guild_configs: guild_configs.clone(),
+                    guild_configs: guild_configs_clone,
+                    role_rank_sessions: role_rank_sessions.clone(),
                 })
             })
         })
@@ -194,6 +212,57 @@ async fn main() {
     // Run with graceful shutdown
     let shard_manager = client.shard_manager.clone();
     
+    // Background Task: Quiz Selector Refresh
+    let http = client.http.clone();
+    let configs = guild_configs.clone(); // This clone works if guild_configs is available.
+    // BUT guild_configs was moved into setup() at line 174 (original view).
+    // Wait, in line 94: let guild_configs = Arc::new(DashMap::new());
+    // In setup(): ... guild_configs: guild_configs.clone() ... this moves the Arc clone? No, the variable itself if captured.
+    
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300)); // Check every 5 minutes
+        
+        loop {
+            interval.tick().await;
+            
+            // Iterate over all guild configs
+            for entry in configs.iter() {
+                if let Some(channel_id_str) = &entry.value().quiz_channel_id {
+                    if let Ok(channel_id) = channel_id_str.parse::<u64>().map(serenity::ChannelId::new) {
+                        // Check last message in channel
+                        match channel_id.messages(&http, serenity::GetMessages::new().limit(1)).await {
+                            Ok(messages) => {
+                                let needs_refresh = if let Some(last_msg) = messages.first() {
+                                    !last_msg.author.bot 
+                                } else {
+                                    true 
+                                };
+
+                                if needs_refresh {
+                                    // Find and delete old bot messages to clean up
+                                    if let Ok(history) = channel_id.messages(&http, serenity::GetMessages::new().limit(10)).await {
+                                        for msg in history {
+                                            if msg.author.bot && msg.embeds.iter().any(|e| e.title.as_deref() == Some("Quiz Selector")) {
+                                                let _ = msg.delete(&http).await;
+                                            }
+                                        }
+                                    }
+                                    
+                                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                                    
+                                    if let Err(e) = crate::commands::role_rank::send_quiz_selector(&http, channel_id).await {
+                                        error!("Failed to auto-refresh quiz selector: {:?}", e);
+                                    }
+                                }
+                            },
+                            Err(e) => error!("Failed to check quiz channel messages: {:?}", e),
+                        }
+                    }
+                }
+            }
+        }
+    });
+
     tokio::spawn(async move {
         tokio::signal::ctrl_c()
             .await
