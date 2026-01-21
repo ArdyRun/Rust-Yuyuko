@@ -14,6 +14,8 @@ pub enum ConfigKey {
     QuizChannel,
     #[name = "Quiz Category"]
     QuizCategory,
+    #[name = "Immersion Channel"]
+    ImmersionChannel,
 }
 
 /// Manage bot configuration
@@ -68,6 +70,7 @@ pub async fn set(
         ConfigKey::AyumiChannel => config.ayumi_channel_id = Some(channel_id.clone()),
         ConfigKey::QuizChannel => config.quiz_channel_id = Some(channel_id.clone()),
         ConfigKey::QuizCategory => config.quiz_category_id = Some(channel_id.clone()),
+        ConfigKey::ImmersionChannel => config.immersion_channel_id = Some(channel_id.clone()),
     }
 
     // Save back to Firebase
@@ -130,12 +133,14 @@ pub async fn get(ctx: Context<'_>) -> Result<(), Error> {
     let ayumi = config.ayumi_channel_id.map(|id| format!("<#{}>", id)).unwrap_or_else(|| "Not set".to_string());
     let quiz = config.quiz_channel_id.map(|id| format!("<#{}>", id)).unwrap_or_else(|| "Not set".to_string());
     let quiz_cat = config.quiz_category_id.map(|id| format!("<#{}>", id)).unwrap_or_else(|| "Not set".to_string());
+    let immersion = config.immersion_channel_id.map(|id| format!("<#{}>", id)).unwrap_or_else(|| "Not set".to_string());
 
     let embed = serenity::CreateEmbed::new()
         .title("Server Configuration")
         .field("Ayumi Channel", ayumi, true)
         .field("Quiz Channel", quiz, true)
         .field("Quiz Category", quiz_cat, true)
+        .field("Immersion Channel", immersion, true)
         .color(colors::INFO);
 
     ctx.send(poise::CreateReply::default().embed(embed)).await?;

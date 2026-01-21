@@ -66,6 +66,40 @@ pub async fn immersion(
 ) -> Result<(), Error> {
     ctx.defer().await?;
 
+    // Check channel restriction
+    if let Some(guild_id) = ctx.guild_id() {
+        let data = ctx.data();
+        let gid = guild_id.to_string();
+        
+        let config = if let Some(cached) = data.guild_configs.get(&gid) {
+            Some(cached.clone())
+        } else {
+            // Try fetch if not in cache (though cache should be populated on startup or first activity)
+            // For now, simple cache check or fetch
+             match data.firebase.get_document("guilds", &gid).await {
+                Ok(Some(doc)) => {
+                     let cfg = serde_json::from_value::<crate::models::guild::GuildConfig>(doc).unwrap_or_default();
+                     data.guild_configs.insert(gid.clone(), cfg.clone());
+                     Some(cfg)
+                },
+                _ => None
+             }
+        };
+
+        if let Some(cfg) = config {
+            if let Some(allowed_channel_id) = cfg.immersion_channel_id {
+                let current_channel = ctx.channel_id().to_string();
+                if current_channel != allowed_channel_id {
+                     ctx.send(poise::CreateReply::default().content(format!(
+                        "Command ini hanya bisa digunakan di <#{}>.",
+                        allowed_channel_id
+                    )).ephemeral(true)).await?;
+                    return Ok(());
+                }
+            }
+        }
+    }
+
     let user = ctx.author();
     let data = ctx.data();
     let media_type_str = media_type.as_str();

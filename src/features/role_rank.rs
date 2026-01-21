@@ -383,7 +383,11 @@ async fn handle_kotoba_message(ctx: &serenity::Context, msg: &serenity::Message,
             }
         }
 
-        let mut session = data.role_rank_sessions.get_mut(&user_id).unwrap(); // safe unwrap
+        let mut session = if let Some(s) = data.role_rank_sessions.get_mut(&user_id) {
+            s
+        } else {
+            return Ok(());
+        };
         let quiz = match QUIZZES.get(&session.quiz_id) {
             Some(q) => q,
             None => return Ok(()),

@@ -219,47 +219,61 @@ async fn main() {
     // Wait, in line 94: let guild_configs = Arc::new(DashMap::new());
     // In setup(): ... guild_configs: guild_configs.clone() ... this moves the Arc clone? No, the variable itself if captured.
     
+    // Add imports at top of file needed for this: use futures::StreamExt;
+    
     tokio::spawn(async move {
+        use futures::StreamExt;
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(300)); // Check every 5 minutes
         
         loop {
             interval.tick().await;
             
-            // Iterate over all guild configs
-            for entry in configs.iter() {
-                if let Some(channel_id_str) = &entry.value().quiz_channel_id {
-                    if let Ok(channel_id) = channel_id_str.parse::<u64>().map(serenity::ChannelId::new) {
-                        // Check last message in channel
-                        match channel_id.messages(&http, serenity::GetMessages::new().limit(1)).await {
-                            Ok(messages) => {
-                                let needs_refresh = if let Some(last_msg) = messages.first() {
-                                    !last_msg.author.bot 
-                                } else {
-                                    true 
-                                };
+            // Snapshot the configs to avoid holding locks during async operations
+            // We collect only what we need: channel IDs
+            let channels_to_check: Vec<String> = configs.iter()
+                .filter_map(|entry| entry.value().quiz_channel_id.clone())
+                .collect();
 
-                                if needs_refresh {
-                                    // Find and delete old bot messages to clean up
-                                    if let Ok(history) = channel_id.messages(&http, serenity::GetMessages::new().limit(10)).await {
-                                        for msg in history {
-                                            if msg.author.bot && msg.embeds.iter().any(|e| e.title.as_deref() == Some("Quiz Selector")) {
-                                                let _ = msg.delete(&http).await;
+            // Create a stream of futures for concurrent processing
+            let tasks = futures::stream::iter(channels_to_check)
+                .map(|channel_id_str| {
+                    let http = http.clone();
+                    
+                    async move {
+                        if let Ok(channel_id) = channel_id_str.parse::<u64>().map(serenity::ChannelId::new) {
+                            // Check last message in channel
+                            match channel_id.messages(&http, serenity::GetMessages::new().limit(1)).await {
+                                Ok(messages) => {
+                                    let needs_refresh = if let Some(last_msg) = messages.first() {
+                                        !last_msg.author.bot 
+                                    } else {
+                                        true 
+                                    };
+
+                                    if needs_refresh {
+                                        // Find and delete old bot messages to clean up
+                                        if let Ok(history) = channel_id.messages(&http, serenity::GetMessages::new().limit(10)).await {
+                                            for msg in history {
+                                                if msg.author.bot && msg.embeds.iter().any(|e| e.title.as_deref() == Some("Quiz Selector")) {
+                                                    let _ = msg.delete(&http).await;
+                                                }
                                             }
                                         }
+                                        
+                                        // Send new selector
+                                        if let Err(e) = crate::commands::role_rank::send_quiz_selector(&http, channel_id).await {
+                                            error!("Failed to auto-refresh quiz selector: {:?}", e);
+                                        }
                                     }
-                                    
-                                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                                    
-                                    if let Err(e) = crate::commands::role_rank::send_quiz_selector(&http, channel_id).await {
-                                        error!("Failed to auto-refresh quiz selector: {:?}", e);
-                                    }
-                                }
-                            },
-                            Err(e) => error!("Failed to check quiz channel messages: {:?}", e),
+                                },
+                                Err(e) => error!("Failed to check quiz channel messages: {:?}", e),
+                            }
                         }
                     }
-                }
-            }
+                })
+                .buffer_unordered(10); // Process 10 guilds concurrently
+
+            tasks.collect::<Vec<_>>().await;
         }
     });
 
