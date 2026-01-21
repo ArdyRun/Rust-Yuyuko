@@ -54,6 +54,8 @@ fn get_commands() -> Vec<poise::Command<Data, Error>> {
         commands::afk::afk(),
         commands::subs::subs(),
         commands::export::export(),
+        commands::react::react(),
+        commands::prompt::prompt(),
     ]
 }
 
@@ -114,8 +116,24 @@ async fn main() {
                             error!("Command error: {:?}", error);
                             let _ = ctx.say(format!("Error: {}", error)).await;
                         }
+                        poise::FrameworkError::MissingUserPermissions { missing_permissions, ctx, .. } => {
+                            let msg = if let Some(perms) = missing_permissions {
+                                format!("You need the **{:?}** permission to use this command.", perms)
+                            } else {
+                                "You do not have the required permissions to use this command.".to_string()
+                            };
+                            let _ = ctx.send(poise::CreateReply::default().content(msg).ephemeral(true)).await;
+                        }
+                        poise::FrameworkError::MissingBotPermissions { missing_permissions, ctx, .. } => {
+                             let msg = format!("I need the **{:?}** permission to execute this command.", missing_permissions);
+                             let _ = ctx.send(poise::CreateReply::default().content(msg).ephemeral(true)).await;
+                        }
                         err => {
                             error!("Framework error: {:?}", err);
+                            // Try to notify the user if possible about the unexpected error
+                            if let Some(ctx) = err.ctx() {
+                                let _ = ctx.send(poise::CreateReply::default().content("An unexpected error occurred.").ephemeral(true)).await;
+                            }
                         }
                     }
                 })

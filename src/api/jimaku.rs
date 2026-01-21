@@ -2,13 +2,16 @@
 // For searching and downloading anime subtitles
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use tracing::debug;
 
 pub const JIMAKU_API_BASE: &str = "https://jimaku.cc/api";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct JimakuEntry {
+    #[serde(default)]
     pub id: i32,
+    #[serde(default)]
     pub name: String,
     pub english_name: Option<String>,
     pub japanese_name: Option<String>,
@@ -17,10 +20,15 @@ pub struct JimakuEntry {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct JimakuFile {
+    #[serde(default)]
     pub id: i32,
+    #[serde(default)]
     pub name: String,
+    #[serde(default)]
     pub size: u64,
+    #[serde(default)]
     pub url: String,
+    #[serde(default)]
     pub last_modified: String,
 }
 

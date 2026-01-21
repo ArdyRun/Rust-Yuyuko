@@ -171,3 +171,131 @@ pub async fn completion_gemini_vision(
         .and_then(|p| p.text.clone())
         .ok_or_else(|| anyhow::anyhow!("No text in Gemini Vision response"))
 }
+
+/// Response structures for image generation
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImageGenResponse {
+    pub candidates: Option<Vec<ImageGenCandidate>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImageGenCandidate {
+    pub content: ImageGenContent,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImageGenContent {
+    pub parts: Vec<ImageGenPart>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageGenPart {
+    pub text: Option<String>,
+    pub inline_data: Option<ImageInlineData>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageInlineData {
+    pub mime_type: String,
+    pub data: String,
+}
+
+/// Result of image generation
+pub struct ImageGenerationResult {
+    pub image_data: Vec<u8>,
+    pub mime_type: String,
+    pub text: Option<String>,
+}
+
+/// Generate an image using Gemini's image generation model
+pub async fn generate_image(
+    data: &Data,
+    prompt: &str,
+) -> anyhow::Result<ImageGenerationResult> {
+    let api_key = std::env::var("GEMINI_API_KEY")?;
+    
+    // Using gemini-2.0-flash-preview-image-generation model
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-preview-image-generation:generateContent?key={}",
+        api_key
+    );
+
+    // Clean up the prompt
+    let clean_prompt = prompt
+        .to_lowercase()
+        .replace("buatkan gambar", "")
+        .replace("generate gambar", "")
+        .replace("buat gambar", "")
+        .replace("gambarkan", "")
+        .replace("draw", "")
+        .replace("create image", "")
+        .replace("bikin gambar", "")
+        .trim()
+        .to_string();
+    
+    let full_prompt = format!(
+        "Create a high-quality, detailed anime style image of: {}. Make it visually appealing, artistic, and well-composed.",
+        clean_prompt
+    );
+
+    let body = json!({
+        "contents": [{
+            "parts": [{
+                "text": full_prompt
+            }]
+        }],
+        "generationConfig": {
+            "temperature": 0.7,
+            "responseModalities": ["TEXT", "IMAGE"]
+        }
+    });
+
+    let res = data.http_client
+        .post(&url)
+        .json(&body)
+        .send()
+        .await?;
+
+    if !res.status().is_success() {
+        let error_text = res.text().await?;
+        anyhow::bail!("Gemini Image Generation API error: {}", error_text);
+    }
+    
+    let response: ImageGenResponse = res.json().await?;
+    
+    // Find image part in response
+    let candidates = response.candidates
+        .ok_or_else(|| anyhow::anyhow!("No candidates in image generation response"))?;
+    
+    let candidate = candidates.first()
+        .ok_or_else(|| anyhow::anyhow!("Empty candidates array"))?;
+    
+    // Look for image data in parts
+    let mut image_data: Option<ImageInlineData> = None;
+    let mut text_response: Option<String> = None;
+    
+    for part in &candidate.content.parts {
+        if let Some(ref inline) = part.inline_data {
+            if inline.mime_type.starts_with("image/") {
+                image_data = Some(inline.clone());
+            }
+        }
+        if let Some(ref text) = part.text {
+            text_response = Some(text.clone());
+        }
+    }
+    
+    let inline = image_data
+        .ok_or_else(|| anyhow::anyhow!("No image data in response"))?;
+    
+    use base64::{Engine as _, engine::general_purpose};
+    let decoded = general_purpose::STANDARD.decode(&inline.data)?;
+    
+    Ok(ImageGenerationResult {
+        image_data: decoded,
+        mime_type: inline.mime_type,
+        text: text_response,
+    })
+}

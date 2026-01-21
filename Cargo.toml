@@ -57,6 +57,7 @@ plotters = { version = "0.3.7", default-features = false, features = ["bitmap_en
 ab_glyph = "0.2.32"
 charts-rs = { version = "0.3.27", features = ["image-encoder"] }
 futures = "0.3"
+unicode-normalization = "0.1.25"
 
 [profile.release]
 opt-level = "z"     # Optimize for size

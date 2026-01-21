@@ -256,13 +256,24 @@ impl FirebaseClient {
         Ok(id.to_string())
     }
 
-    /// Query a subcollection with filters
+    /// Query a subcollection - returns just the data
     pub async fn query_subcollection(
         &self,
         collection: &str,
         doc_id: &str,
         subcollection: &str,
     ) -> Result<Vec<Value>> {
+        let docs = self.query_subcollection_with_ids(collection, doc_id, subcollection).await?;
+        Ok(docs.into_iter().map(|(_, v)| v).collect())
+    }
+
+    /// Query a subcollection with filters - returns (id, data) tuples
+    pub async fn query_subcollection_with_ids(
+        &self,
+        collection: &str,
+        doc_id: &str,
+        subcollection: &str,
+    ) -> Result<Vec<(String, Value)>> {
         let token = self.get_access_token().await?;
         let url = format!(
             "{}/{}/{}/{}",
@@ -289,10 +300,42 @@ impl FirebaseClient {
         let result: Value = response.json().await?;
         let docs = result["documents"]
             .as_array()
-            .map(|arr| arr.iter().map(from_firestore_document).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|doc| {
+                        let id = doc["name"].as_str()
+                            .and_then(|name| name.split('/').last())
+                            .map(|s| s.to_string())?;
+                        let data = from_firestore_document(doc);
+                        Some((id, data))
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
 
         Ok(docs)
+    }
+
+    /// Delete a document
+    pub async fn delete_document(&self, collection: &str, doc_id: &str) -> Result<()> {
+        let token = self.get_access_token().await?;
+        let url = format!("{}/{}/{}", self.base_url(), collection, doc_id);
+
+        let response = self
+            .client
+            .delete(&url)
+            .bearer_auth(&token)
+            .send()
+            .await?;
+
+        if !response.status().is_success() && response.status() != 404 {
+            let status = response.status();
+            let body = response.text().await?;
+            debug!("Firebase delete error: {}", body);
+            return Err(anyhow!("Firebase delete error: {}", status));
+        }
+
+        Ok(())
     }
 
     /// Get all users collection

@@ -1,54 +1,185 @@
 use poise::serenity_prelude as serenity;
-use tracing::{error, info, debug};
+use tracing::{error, debug};
 use std::sync::Arc;
+use std::collections::HashMap;
 use tokio::sync::Mutex;
 use lru::LruCache;
 use std::num::NonZeroUsize;
 use once_cell::sync::Lazy;
+use chrono::{DateTime, Utc};
 
-use crate::features::novel_recommender::recommend_novels;
+use crate::features::novel_recommender::{recommend_novels, smart_novel_search};
+use crate::features::custom_prompt::get_user_custom_prompt;
 use crate::Data;
 use crate::models::guild::GuildConfig;
-use crate::api::llm::{completion_openrouter, completion_gemini_vision, ChatMessage};
+use crate::api::llm::{completion_openrouter, completion_gemini_vision, generate_image, ChatMessage};
 use crate::utils::ayumi_prompt::AYUMI_SYSTEM_PROMPT;
 
-// Global conversation history cache (User ID -> List of Messages)
-// Capacity: 100 users, 10 messages each
+// ============ User Context ============
+
+/// User data with context for personalized responses
+#[derive(Debug, Clone)]
+pub struct UserData {
+    pub user_id: u64,
+    pub username: String,
+    pub display_name: String,
+    pub nickname: Option<String>,
+    pub best_name: String,
+    pub interaction_count: u32,
+    pub last_interaction: DateTime<Utc>,
+    pub conversation_history: Vec<ChatMessage>,
+}
+
+impl UserData {
+    pub fn new(user_id: u64, username: &str, display_name: &str, nickname: Option<&str>) -> Self {
+        let best_name = nickname.unwrap_or(display_name).to_string();
+        Self {
+            user_id,
+            username: username.to_string(),
+            display_name: display_name.to_string(),
+            nickname: nickname.map(|s| s.to_string()),
+            best_name,
+            interaction_count: 1,
+            last_interaction: Utc::now(),
+            conversation_history: Vec::new(),
+        }
+    }
+}
+
+// Global caches
 type HistoryCache = LruCache<u64, Vec<ChatMessage>>;
+type UserCache = HashMap<u64, UserData>;
 
 static CONVERSATION_HISTORY: Lazy<Arc<Mutex<HistoryCache>>> = Lazy::new(|| {
     Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(100).unwrap())))
 });
 
-/// Handle incoming messages for Ayumi
+static USER_DATA: Lazy<Arc<Mutex<UserCache>>> = Lazy::new(|| {
+    Arc::new(Mutex::new(HashMap::new()))
+});
+
+// ============ Detection Functions ============
+
+fn detect_image_generation(text: &str) -> bool {
+    let keywords = [
+        "buatkan gambar", "generate gambar", "buat gambar", "gambarkan",
+        "draw", "create image", "bikin gambar", "lukis", "sketch",
+        "ilustrasi", "visualisasi", "make an image", "buatkan ilustrasi",
+        "create illustration", "gambar anime", "anime art", "pixel art", "artwork"
+    ];
+    let lower = text.to_lowercase();
+    keywords.iter().any(|k| lower.contains(k))
+}
+
+fn detect_avatar_question(text: &str) -> bool {
+    let keywords = [
+        "foto profil", "avatar", "profile picture", "pp", "foto pp",
+        "gambar profil", "foto saya", "avatar saya", "pp saya",
+        "lihat foto", "foto gue", "avatar gue", "pp gue", "pfp"
+    ];
+    let lower = text.to_lowercase();
+    keywords.iter().any(|k| lower.contains(k))
+}
+
+fn detect_novel_request(text: &str) -> bool {
+    let keywords = [
+        "novel", "light novel", "cari novel", "rekomendasi novel",
+        "download novel", "unduh novel", "novel saran", "novel untuk",
+        "novel pemula", "novel jlpt", "novel n5", "novel n4", "novel n3",
+        "novel n2", "novel n1", "novel romance", "novel isekai"
+    ];
+    let lower = text.to_lowercase();
+    keywords.iter().any(|k| lower.contains(k))
+}
+
+// ============ Smart Message Chunking ============
+
+/// Split message by lines to avoid cutting words
+fn smart_chunk_message(text: &str, max_len: usize) -> Vec<String> {
+    if text.len() <= max_len {
+        return vec![text.to_string()];
+    }
+
+    let mut chunks = Vec::new();
+    let mut current_chunk = String::new();
+    
+    for line in text.lines() {
+        // If single line is too long, split it
+        if line.len() > max_len {
+            // First, push current chunk if not empty
+            if !current_chunk.is_empty() {
+                chunks.push(current_chunk);
+                current_chunk = String::new();
+            }
+            
+            // Split long line by words
+            let mut word_chunk = String::new();
+            for word in line.split_whitespace() {
+                if word_chunk.len() + word.len() + 1 > max_len {
+                    if !word_chunk.is_empty() {
+                        chunks.push(word_chunk);
+                    }
+                    word_chunk = word.to_string();
+                } else {
+                    if !word_chunk.is_empty() {
+                        word_chunk.push(' ');
+                    }
+                    word_chunk.push_str(word);
+                }
+            }
+            if !word_chunk.is_empty() {
+                current_chunk = word_chunk;
+            }
+        } else if current_chunk.len() + line.len() + 1 > max_len {
+            // Push current chunk and start new one
+            if !current_chunk.is_empty() {
+                chunks.push(current_chunk);
+            }
+            current_chunk = line.to_string();
+        } else {
+            // Add line to current chunk
+            if !current_chunk.is_empty() {
+                current_chunk.push('\n');
+            }
+            current_chunk.push_str(line);
+        }
+    }
+    
+    // Don't forget last chunk
+    if !current_chunk.is_empty() {
+        chunks.push(current_chunk);
+    }
+    
+    chunks
+}
+
+// ============ Main Handler ============
+
 pub async fn handle_message(
     ctx: &serenity::Context,
     msg: &serenity::Message,
     data: &Data,
 ) -> Result<(), anyhow::Error> {
-    // 1. Ignore bots and self
     if msg.author.bot {
         return Ok(());
     }
 
-    // 2. Check if in a guild
     let guild_id = match msg.guild_id {
         Some(gid) => gid.to_string(),
-        None => return Ok(()), // Ignore DMs for now or handle differently
+        None => return Ok(()),
     };
 
-    // 3. Get Guild Config (Check Cache first)
+    // Get guild config
     let config = if let Some(cached) = data.guild_configs.get(&guild_id) {
         cached.clone()
     } else {
-        // Fallback: Fetch from Firebase and Cache
         match data.firebase.get_document("guilds", &guild_id).await {
             Ok(Some(doc)) => {
                 let cfg = serde_json::from_value::<GuildConfig>(doc).unwrap_or_default();
                 data.guild_configs.insert(guild_id.clone(), cfg.clone());
                 cfg
             },
-            Ok(None) => return Ok(()), // No config, do nothing
+            Ok(None) => return Ok(()),
             Err(e) => {
                 error!("Failed to fetch guild config for {}: {:?}", guild_id, e);
                 return Ok(());
@@ -56,45 +187,60 @@ pub async fn handle_message(
         }
     };
 
-    // 4. Check if channel matches Ayumi Channel
     let ayumi_channel = match config.ayumi_channel_id {
         Some(id) => id,
-        None => return Ok(()), // Not configured
+        None => return Ok(()),
     };
 
     if msg.channel_id.to_string() != ayumi_channel {
-        return Ok(()); // Wrong channel
+        return Ok(());
     }
 
-    // 5. Respond!
     let _typing = msg.channel_id.start_typing(&ctx.http);
 
-    // Prepare context
+    // Get or create user data
     let user_id = msg.author.id.get();
+    let nickname = msg.member.as_ref().and_then(|m| m.nick.as_deref());
+    let display_name = msg.author.global_name.as_deref().unwrap_or(&msg.author.name);
+    
+    let (user_name, interaction_count) = {
+        let mut users = USER_DATA.lock().await;
+        let user_data = users.entry(user_id).or_insert_with(|| {
+            UserData::new(user_id, &msg.author.name, display_name, nickname)
+        });
+        user_data.interaction_count += 1;
+        user_data.last_interaction = Utc::now();
+        if nickname.is_some() {
+            user_data.nickname = nickname.map(|s| s.to_string());
+            user_data.best_name = nickname.unwrap().to_string();
+        }
+        (user_data.best_name.clone(), user_data.interaction_count)
+    };
+
+    // Get conversation history
     let history_clone = {
         let mut cache = CONVERSATION_HISTORY.lock().await;
         cache.get(&user_id).cloned().unwrap_or_default()
     };
 
-    // Build messages payload
     let mut messages = history_clone;
     messages.push(ChatMessage {
         role: "user".to_string(),
         content: msg.content.clone(),
     });
 
-    // Check for attachments (Images)
+    // Check for image attachment
     let attachment = msg.attachments.iter().find(|a| {
         a.content_type.as_ref().map_or(false, |ct| ct.starts_with("image/"))
     });
 
-    let response = if let Some(att) = attachment {
-        // Handle Image Analysis
-        debug!("Processing image attachment for user {}", msg.author.name);
+    let response: String;
+
+    if let Some(att) = attachment {
+        debug!("Processing image attachment for user {}", user_name);
         
-        // Download image
         let image_data = match att.download().await {
-            Ok(data) => data,
+            Ok(d) => d,
             Err(e) => {
                 error!("Failed to download attachment: {:?}", e);
                 msg.reply(ctx, "Gagal mengunduh gambar...").await?;
@@ -102,7 +248,6 @@ pub async fn handle_message(
             }
         };
 
-        // Determine prompt (use message content or default)
         let prompt = if msg.content.trim().is_empty() {
             "Deskripsikan gambar ini dengan gaya bahasa Ayumi."
         } else {
@@ -110,57 +255,141 @@ pub async fn handle_message(
         };
 
         let mime_type = att.content_type.as_deref().unwrap_or("image/jpeg");
-
-        // Call Gemini Vision
-        match completion_gemini_vision(data, prompt, &image_data, mime_type).await {
+        
+        response = match completion_gemini_vision(data, prompt, &image_data, mime_type).await {
             Ok(res) => res,
             Err(e) => {
                 error!("Ayumi Gemini Vision error: {:?}", e);
                 "Maaf, mataku agak buram... Gak bisa liat gambarnya jelas.".to_string()
             }
+        };
+    } else if detect_image_generation(&msg.content) {
+        debug!("Processing image generation for user {}", user_name);
+        
+        let generating_msg = msg.reply(ctx, format!("{}, Ayumi lagi bikin gambar sesuai request kamu nih! Tunggu sebentar ya...", user_name)).await?;
+        
+        match generate_image(data, &msg.content).await {
+            Ok(result) => {
+                let _ = generating_msg.delete(ctx).await;
+                let extension = if result.mime_type.contains("png") { "png" } else { "jpg" };
+                let filename = format!("ayumi_generated_{}.{}", chrono::Utc::now().timestamp(), extension);
+                
+                let attachment = serenity::CreateAttachment::bytes(result.image_data, filename);
+                let reply_content = format!("{}, nih gambar yang Ayumi buatin! Gimana, sesuai ekspektasi gak?", user_name);
+                
+                msg.channel_id.send_message(ctx, serenity::CreateMessage::new()
+                    .content(&reply_content)
+                    .add_file(attachment)
+                ).await?;
+                
+                response = reply_content;
+            }
+            Err(e) => {
+                error!("Image generation failed: {:?}", e);
+                let _ = generating_msg.delete(ctx).await;
+                response = format!("{}, maaf nih Ayumi lagi gabisa bikin gambar. Coba lagi nanti ya", user_name);
+                msg.reply(ctx, &response).await?;
+            }
+        };
+        
+        // Update history and return
+        {
+            let mut cache = CONVERSATION_HISTORY.lock().await;
+            messages.push(ChatMessage { role: "assistant".to_string(), content: response.clone() });
+            if messages.len() > 20 {
+                messages = messages.iter().rev().take(20).rev().cloned().collect();
+            }
+            cache.put(user_id, messages);
         }
-    } else if msg.content.to_lowercase().contains("rekomendasi novel") || msg.content.to_lowercase().contains("novel saran") {
-        // Handle Novel Recommendation
-        debug!("Processing novel recommendation for user {}", msg.author.name);
-        recommend_novels(5) // Suggest 5 novels
+        return Ok(());
+        
+    } else if detect_avatar_question(&msg.content) {
+        debug!("Processing avatar analysis for user {}", user_name);
+        
+        let avatar_url = msg.author.avatar_url().unwrap_or_else(|| msg.author.default_avatar_url());
+        
+        let avatar_response = match data.http_client.get(&avatar_url).send().await {
+            Ok(res) => res,
+            Err(e) => {
+                error!("Failed to fetch avatar: {:?}", e);
+                msg.reply(ctx, "Ayumi gak bisa liat foto profil kamu...").await?;
+                return Ok(());
+            }
+        };
+        
+        let avatar_data = match avatar_response.bytes().await {
+            Ok(bytes) => bytes.to_vec(),
+            Err(e) => {
+                error!("Failed to read avatar bytes: {:?}", e);
+                msg.reply(ctx, "Ayumi gak bisa liat foto profil kamu...").await?;
+                return Ok(());
+            }
+        };
+        
+        let prompt = format!(
+            "Kamu adalah Ayumi. User {} (sudah {} kali ngobrol sama kamu) minta lihat foto profil mereka. Pertanyaan: \"{}\". Analisis dan komentar foto profil ini dengan fun tapi sopan.",
+            user_name, interaction_count, msg.content
+        );
+        
+        response = match completion_gemini_vision(data, &prompt, &avatar_data, "image/png").await {
+            Ok(res) => res,
+            Err(e) => {
+                error!("Avatar analysis error: {:?}", e);
+                format!("{}, Ayumi pengen lihat foto profil kamu tapi lagi error nih!", user_name)
+            }
+        };
+        
+    } else if detect_novel_request(&msg.content) {
+        debug!("Processing smart novel search for user {}", user_name);
+        response = smart_novel_search(data, &msg.content).await;
     } else {
-        // Standard Text Chat
-        // Call LLM
-        debug!("Calling Ayumi LLM for user {}", msg.author.name);
-        match completion_openrouter(data, AYUMI_SYSTEM_PROMPT, messages.clone()).await {
+        debug!("Processing text chat for user {} (interaction #{})", user_name, interaction_count);
+        
+        // Build context with user info
+        let user_context = format!(
+            "User ini namanya {}. Sudah {} kali berinteraksi dengan Ayumi.",
+            user_name, interaction_count
+        );
+        
+        let system_prompt = get_user_custom_prompt(user_id)
+            .unwrap_or_else(|| AYUMI_SYSTEM_PROMPT.to_string());
+        
+        let full_prompt = format!("{}\n\n{}", system_prompt, user_context);
+        
+        response = match completion_openrouter(data, &full_prompt, messages.clone()).await {
             Ok(res) => res,
             Err(e) => {
                 error!("Ayumi LLM error: {:?}", e);
                 "Maaf, Ayumi lagi pusing... Coba lagi nanti ya.".to_string()
             }
-        }
+        };
     };
 
-    // Send reply
-    // TODO: Split message if > 2000 chars (Basic implementation for now)
-    if response.len() > 2000 {
-        let chunks = response.chars().collect::<Vec<char>>().chunks(2000)
-            .map(|c| c.iter().collect::<String>())
-            .collect::<Vec<String>>();
-        
-        for chunk in chunks {
+    // Send reply with smart chunking
+    let chunks = smart_chunk_message(&response, 1950);
+    for (i, chunk) in chunks.iter().enumerate() {
+        if i == 0 {
+            let content = if chunks.len() > 1 {
+                format!("{}\n\n*Lanjut di pesan berikutnya...*", chunk)
+            } else {
+                chunk.to_string()
+            };
+            msg.reply(ctx, &content).await?;
+        } else if i == chunks.len() - 1 {
             msg.channel_id.say(&ctx.http, chunk).await?;
+        } else {
+            msg.channel_id.say(&ctx.http, format!("{}\n\n*Lanjut...*", chunk)).await?;
         }
-    } else {
-        msg.reply(ctx, &response).await?;
     }
 
-    // Update History
+    // Update history
     {
         let mut cache = CONVERSATION_HISTORY.lock().await;
-        // Re-fetch to ensure we have latest (if modified concurrently, though locking prevents this for single user)
-        // Add bot response
         messages.push(ChatMessage {
             role: "assistant".to_string(),
             content: response,
         });
         
-        // Trim history to last 10 turns (20 messages)
         if messages.len() > 20 {
             messages = messages.iter().rev().take(20).rev().cloned().collect();
         }

@@ -10,3 +10,5 @@ pub mod novel;
 pub mod afk;
 pub mod subs;
 pub mod export;
+pub mod react;
+pub mod prompt;
