@@ -8,8 +8,9 @@ use tracing::error;
 use crate::utils::config::{colors, get_effective_date_string, get_media_label, get_unit};
 use crate::utils::points::calculate_points;
 use crate::utils::visualizations::{generate_heatmap, generate_bar_chart, BarData};
+use crate::utils::streak;
 use crate::{Context, Error};
-use chrono::Datelike;
+use chrono::{Datelike, DateTime, Utc};
 
 /// Visualization type choices
 #[derive(Debug, Clone, Copy, poise::ChoiceParameter)]
@@ -117,10 +118,23 @@ pub async fn stat(
             // Aggregate points by date - calculate from activity data
             let mut daily_points: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
             for log in &logs {
-                // Get date from timestamps.date
-                let date = log.get("timestamps")
-                    .and_then(|t| t.get("date"))
-                    .and_then(|d| d.as_str());
+                // Get date (smart JST conversion)
+                // Get date with fallback logic (Legacy Node.js behavior)
+                let timestamps = log.get("timestamps");
+                
+                let date = if let Some(d) = timestamps.and_then(|t| t.get("date")).and_then(|d| d.as_str()) {
+                    Some(d.to_string())
+                } else if let Some(c) = timestamps.and_then(|t| t.get("created")).and_then(|s| s.as_str()) {
+                    // Fallback to 'created' timestamp for legacy logs (UTC+7)
+                    if let Ok(utc) = DateTime::parse_from_rfc3339(c) {
+                        let wib_offset = chrono::FixedOffset::east_opt(7 * 3600).unwrap();
+                        Some(utc.with_timezone(&wib_offset).format("%Y-%m-%d").to_string())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
                 
                 // Get activity type and amount to calculate points
                 let activity = log.get("activity");
@@ -180,15 +194,28 @@ pub async fn stat(
             let mut media_points: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
             
             for log in &logs {
-                // Get date from timestamps.date
-                let date = log.get("timestamps")
-                    .and_then(|t| t.get("date"))
-                    .and_then(|d| d.as_str());
+                // Get date (smart JST conversion)
+                // Get date with fallback logic (Legacy Node.js behavior)
+                let timestamps = log.get("timestamps");
+                
+                let date = if let Some(d) = timestamps.and_then(|t| t.get("date")).and_then(|d| d.as_str()) {
+                    Some(d.to_string())
+                } else if let Some(c) = timestamps.and_then(|t| t.get("created")).and_then(|s| s.as_str()) {
+                    // Fallback to 'created' timestamp for legacy logs (UTC+7)
+                    if let Ok(utc) = DateTime::parse_from_rfc3339(c) {
+                        let wib_offset = chrono::FixedOffset::east_opt(7 * 3600).unwrap();
+                        Some(utc.with_timezone(&wib_offset).format("%Y-%m-%d").to_string())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
                 
                 // Apply date filter if specified
                 if let Some(ref cutoff) = cutoff_date {
-                    if let Some(log_date) = date {
-                        if log_date < cutoff.as_str() {
+                    if let Some(ref log_date) = date {
+                        if log_date.as_str() < cutoff.as_str() {
                             continue; // Skip logs before cutoff
                         }
                     }
@@ -295,7 +322,36 @@ pub async fn stat(
     stat_entries.sort_by(|a, b| b.points.cmp(&a.points));
 
     // Calculate streaks
-    let (current_streak, longest_streak) = calculate_user_streaks(&data.firebase, &user_id).await;
+    let (current_streak, longest_streak) = {
+        let logs = match data.firebase.query_subcollection("users", &user_id, "immersion_logs").await {
+            Ok(l) => l,
+            Err(_) => Vec::new(),
+        };
+        
+        let dates: Vec<String> = logs.iter()
+            .filter_map(|log| {
+                let timestamps = log.get("timestamps")?;
+                
+                // Try explicit date first
+                if let Some(d) = timestamps.get("date").and_then(|v| v.as_str()) {
+                    return Some(d.to_string());
+                }
+                
+                // Fallback to created timestamp (UTC+7)
+                if let Some(c) = timestamps.get("created").and_then(|v| v.as_str()) {
+                    if let Ok(utc) = DateTime::parse_from_rfc3339(c) {
+                        let wib_offset = chrono::FixedOffset::east_opt(7 * 3600).unwrap();
+                        return Some(utc.with_timezone(&wib_offset).format("%Y-%m-%d").to_string());
+                    }
+                }
+                
+                None
+            })
+            .collect();
+            
+        let result = streak::calculate_streak(&dates);
+        (result.current, result.longest)
+    };
 
     // Build stats text (grouped in one field)
     let mut stats_text = String::new();
@@ -376,101 +432,7 @@ fn format_number_f64(n: f64) -> String {
 use std::collections::HashSet;
 use std::sync::Arc;
 use crate::api::firebase::FirebaseClient;
-use chrono::{Duration, NaiveDate};
+use chrono::Duration;
 
-/// Calculate user streaks (current and longest) from immersion_logs
-async fn calculate_user_streaks(firebase: &Arc<FirebaseClient>, user_id: &str) -> (i32, i32) {
-    let logs = match firebase.query_subcollection("users", user_id, "immersion_logs").await {
-        Ok(l) => l,
-        Err(_) => return (0, 0),
-    };
-    
-    if logs.is_empty() {
-        return (0, 0);
-    }
-    
-    // Extract unique dates
-    let mut date_set: HashSet<String> = HashSet::new();
-    for log in &logs {
-        if let Some(date_str) = log
-            .get("timestamps")
-            .and_then(|t| t.get("date"))
-            .and_then(|d| d.as_str())
-        {
-            date_set.insert(date_str.to_string());
-        }
-    }
-    
-    if date_set.is_empty() {
-        return (0, 0);
-    }
-    
-    let mut dates: Vec<String> = date_set.into_iter().collect();
-    dates.sort();
-    
-    // Get today's date
-    let today = get_effective_date_string();
-    let today_parsed = match NaiveDate::parse_from_str(&today, "%Y-%m-%d") {
-        Ok(d) => d,
-        Err(_) => return (0, 0),
-    };
-    let yesterday = (today_parsed - Duration::days(1)).format("%Y-%m-%d").to_string();
-    
-    // Calculate current streak
-    let mut current_streak = 0;
-    let mut expected_date = today.clone();
-    
-    for date in dates.iter().rev() {
-        if date == &expected_date {
-            current_streak += 1;
-            if let Ok(parsed) = NaiveDate::parse_from_str(&expected_date, "%Y-%m-%d") {
-                expected_date = (parsed - Duration::days(1)).format("%Y-%m-%d").to_string();
-            }
-        } else if date < &expected_date {
-            break;
-        }
-    }
-    
-    // If no activity today but activity yesterday
-    if current_streak == 0 && dates.contains(&yesterday) {
-        expected_date = yesterday.clone();
-        for date in dates.iter().rev() {
-            if date == &expected_date {
-                current_streak += 1;
-                if let Ok(parsed) = NaiveDate::parse_from_str(&expected_date, "%Y-%m-%d") {
-                    expected_date = (parsed - Duration::days(1)).format("%Y-%m-%d").to_string();
-                }
-            } else if date < &expected_date {
-                break;
-            }
-        }
-    }
-    
-    // Calculate longest streak
-    let mut longest_streak = if dates.is_empty() { 0 } else { 1 };
-    let mut temp_streak = 1;
-    
-    for i in 1..dates.len() {
-        if let (Ok(prev), Ok(curr)) = (
-            NaiveDate::parse_from_str(&dates[i - 1], "%Y-%m-%d"),
-            NaiveDate::parse_from_str(&dates[i], "%Y-%m-%d"),
-        ) {
-            let expected_next = (prev + Duration::days(1)).format("%Y-%m-%d").to_string();
-            if dates[i] == expected_next {
-                temp_streak += 1;
-            } else {
-                if temp_streak > longest_streak {
-                    longest_streak = temp_streak;
-                }
-                temp_streak = 1;
-            }
-        }
-    }
-    
-    if temp_streak > longest_streak {
-        longest_streak = temp_streak;
-    }
-    
-    (current_streak, longest_streak)
-}
+// Local calculate_user_streaks removed in favor of utils::streak::calculate_streak
 

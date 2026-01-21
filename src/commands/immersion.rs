@@ -6,10 +6,15 @@ use poise::serenity_prelude as serenity;
 use serde_json::json;
 use tracing::{debug, error};
 
-use crate::utils::config::{colors, get_effective_date, get_effective_date_string, get_media_label, get_unit};
+use crate::utils::config::{
+    colors, get_effective_date, get_effective_date_string, 
+    get_media_label, get_unit
+};
 use crate::utils::points::calculate_points;
+use crate::utils::streak;
 use crate::api::{anilist, vndb, youtube};
 use crate::{Context, Error};
+use chrono::{DateTime, Utc, NaiveDate};
 
 /// Media type choices for the command
 #[derive(Debug, Clone, Copy, poise::ChoiceParameter)]
@@ -210,14 +215,16 @@ pub async fn immersion(
     // Validate custom date if provided
     let effective_date = get_effective_date();
     let date_str = if let Some(ref custom_date) = date {
-        // Basic validation
-        if !custom_date.chars().all(|c| c.is_ascii_digit() || c == '-') {
-            ctx.say("Invalid date format. Use YYYY-MM-DD").await?;
-            return Ok(());
+        // Strict validation: YYYY-MM-DD
+        match NaiveDate::parse_from_str(custom_date, "%Y-%m-%d") {
+            Ok(parsed) => parsed.format("%Y-%m-%d").to_string(),
+            Err(_) => {
+                ctx.say("Invalid date format. Please use YYYY-MM-DD (e.g. 2026-01-21)").await?;
+                return Ok(());
+            }
         }
-        custom_date.clone()
     } else {
-        get_effective_date_string()
+        effective_date.format("%Y-%m-%d").to_string()
     };
 
     // Calculate points
@@ -377,11 +384,43 @@ pub async fn immersion(
     let updated_total = current_total + amount;
     
     // Calculate streak from immersion_logs
-    let global_streak = match calculate_user_streak(firebase, &user_id).await {
-        Ok(streak) => streak,
+    // We fetch logs, validte timestamps, and repair history to JST if needed
+    let global_streak = match firebase.query_subcollection("users", &user_id, "immersion_logs").await {
+        Ok(logs) => {
+            let mut dates: Vec<String> = logs.iter()
+                .filter_map(|log| {
+                    let timestamps = log.get("timestamps")?;
+                    
+                    // Try to get explicit 'date' field first (YYYY-MM-DD)
+                    if let Some(date_str) = timestamps.get("date").and_then(|v| v.as_str()) {
+                        return Some(date_str.to_string());
+                    }
+                    
+                    // Fallback to 'created' timestamp for legacy logs
+                    // Legacy bot (Node.js) used server local time (WIB/UTC+7) for raw dates
+                    if let Some(created_str) = timestamps.get("created").and_then(|v| v.as_str()) {
+                        if let Ok(created_utc) = DateTime::parse_from_rfc3339(created_str) {
+                            // Convert to UTC+7 (WIB) to match legacy behavior
+                            // Legacy toDateStringRaw just dumped local time
+                            let wib_offset = chrono::FixedOffset::east_opt(7 * 3600).unwrap();
+                            let wib_time = created_utc.with_timezone(&wib_offset);
+                            return Some(wib_time.format("%Y-%m-%d").to_string());
+                        }
+                    }
+                    
+                    None
+                })
+                .collect();
+            
+            // Inject current date to ensure it's counted even if DB read is stale
+            dates.push(date_str.clone());
+            
+            streak::calculate_streak(&dates).current
+        },
         Err(e) => {
             debug!("Failed to calculate streak: {:?}", e);
-            0
+            // Even if fetch fails, we know we have at least 1 streak from today's activity
+            1
         }
     };
 
@@ -427,78 +466,9 @@ fn format_amount(n: f64) -> String {
 use std::collections::HashSet;
 use std::sync::Arc;
 use crate::api::firebase::FirebaseClient;
-use chrono::{Duration, NaiveDate};
+use chrono::Duration;
 
-/// Calculate user streak from immersion_logs
-async fn calculate_user_streak(firebase: &Arc<FirebaseClient>, user_id: &str) -> anyhow::Result<i32> {
-    // Query immersion_logs subcollection
-    let logs = firebase.query_subcollection("users", user_id, "immersion_logs").await?;
-    
-    if logs.is_empty() {
-        return Ok(0);
-    }
-    
-    // Extract unique dates from logs
-    let mut date_set: HashSet<String> = HashSet::new();
-    
-    for log in &logs {
-        // Try to get date from timestamps.date
-        if let Some(date_str) = log
-            .get("timestamps")
-            .and_then(|t| t.get("date"))
-            .and_then(|d| d.as_str())
-        {
-            date_set.insert(date_str.to_string());
-        }
-    }
-    
-    if date_set.is_empty() {
-        return Ok(0);
-    }
-    
-    // Sort dates
-    let mut dates: Vec<String> = date_set.into_iter().collect();
-    dates.sort();
-    
-    // Get today's date (with offset from config)
-    let today = get_effective_date_string();
-    let today_parsed = NaiveDate::parse_from_str(&today, "%Y-%m-%d")?;
-    let yesterday = (today_parsed - Duration::days(1)).format("%Y-%m-%d").to_string();
-    
-    // Calculate current streak (iterate backward from today)
-    let mut current_streak = 0;
-    let mut expected_date = today.clone();
-    
-    // Start from the last date and go backward
-    for date in dates.iter().rev() {
-        if date == &expected_date {
-            current_streak += 1;
-            // Move to previous day
-            let parsed = NaiveDate::parse_from_str(&expected_date, "%Y-%m-%d")?;
-            expected_date = (parsed - Duration::days(1)).format("%Y-%m-%d").to_string();
-        } else if date < &expected_date {
-            // Gap in streak
-            break;
-        }
-    }
-    
-    // If no activity today but activity yesterday, streak still continues
-    if current_streak == 0 && dates.contains(&yesterday) {
-        expected_date = yesterday.clone();
-        
-        for date in dates.iter().rev() {
-            if date == &expected_date {
-                current_streak += 1;
-                let parsed = NaiveDate::parse_from_str(&expected_date, "%Y-%m-%d")?;
-                expected_date = (parsed - Duration::days(1)).format("%Y-%m-%d").to_string();
-            } else if date < &expected_date {
-                break;
-            }
-        }
-    }
-    
-    Ok(current_streak)
-}
+// Local calculate_user_streak removed in favor of utils::streak::calculate_streak
 
 async fn autocomplete_title(
     ctx: Context<'_>,

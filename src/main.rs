@@ -229,15 +229,18 @@ async fn main() {
             interval.tick().await;
             
             // Snapshot the configs to avoid holding locks during async operations
-            // We collect only what we need: channel IDs
-            let channels_to_check: Vec<String> = configs.iter()
-                .filter_map(|entry| entry.value().quiz_channel_id.clone())
+            // We collect (GuildID, ChannelID) to be able to cleanup invalid configs
+            let channels_to_check: Vec<(String, String)> = configs.iter()
+                .filter_map(|entry| {
+                     entry.value().quiz_channel_id.clone().map(|cid| (entry.key().clone(), cid))
+                })
                 .collect();
 
             // Create a stream of futures for concurrent processing
             let tasks = futures::stream::iter(channels_to_check)
-                .map(|channel_id_str| {
+                .map(|(guild_id, channel_id_str)| {
                     let http = http.clone();
+                    let configs = configs.clone();
                     
                     async move {
                         if let Ok(channel_id) = channel_id_str.parse::<u64>().map(serenity::ChannelId::new) {
@@ -266,7 +269,31 @@ async fn main() {
                                         }
                                     }
                                 },
-                                Err(e) => error!("Failed to check quiz channel messages: {:?}", e),
+                                Err(e) => {
+                                    // Handle 404 Unknown Channel to stop log spam
+                                    let is_unknown_channel = match &e {
+                                        serenity::Error::Http(http_err) => {
+                                            match http_err {
+                                                serenity::http::HttpError::UnsuccessfulRequest(resp) => {
+                                                    resp.status_code.as_u16() == 404 || resp.error.code == 10003
+                                                },
+                                                _ => false
+                                            }
+                                        },
+                                        _ => false
+                                    };
+
+                                    if is_unknown_channel {
+                                        tracing::warn!("Quiz channel {} in guild {} is invalid/deleted. Removing from cache to stop errors.", channel_id, guild_id);
+                                        if let Some(mut config) = configs.get_mut(&guild_id) {
+                                            if config.quiz_channel_id == Some(channel_id_str) {
+                                                config.quiz_channel_id = None;
+                                            }
+                                        }
+                                    } else {
+                                        error!("Failed to check quiz channel messages: {:?}", e);
+                                    }
+                                }
                             }
                         }
                     }

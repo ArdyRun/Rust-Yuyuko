@@ -72,18 +72,20 @@ pub mod colors {
     pub const IMMERSION: u32 = 0x00d4aa;
 }
 
-/// Get effective date with day offset applied
+/// Get effective date with day offset applied (JST: UTC+9)
 /// If current time is before DAY_END_HOUR (e.g., 2 AM), return yesterday's date
 pub fn get_effective_date() -> chrono::NaiveDate {
-    use chrono::{Local, Timelike};
+    use chrono::{Utc, Timelike, Duration};
     
-    let now = Local::now();
-    let hours = now.hour();
+    // JST is UTC+9
+    let now_utc = Utc::now();
+    let now_jst = now_utc + Duration::hours(9);
+    let hours = now_jst.hour();
     
     if hours < DAY_END_HOUR {
-        now.date_naive() - chrono::Duration::days(1)
+        now_jst.date_naive() - Duration::days(1)
     } else {
-        now.date_naive()
+        now_jst.date_naive()
     }
 }
 
@@ -91,6 +93,8 @@ pub fn get_effective_date() -> chrono::NaiveDate {
 pub fn get_effective_date_string() -> String {
     get_effective_date().format("%Y-%m-%d").to_string()
 }
+
+
 
 #[cfg(test)]
 mod tests {

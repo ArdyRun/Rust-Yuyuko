@@ -268,6 +268,7 @@ impl FirebaseClient {
     }
 
     /// Query a subcollection with filters - returns (id, data) tuples
+    /// Handles pagination to fetch ALL documents
     pub async fn query_subcollection_with_ids(
         &self,
         collection: &str,
@@ -275,7 +276,7 @@ impl FirebaseClient {
         subcollection: &str,
     ) -> Result<Vec<(String, Value)>> {
         let token = self.get_access_token().await?;
-        let url = format!(
+        let base_url = format!(
             "{}/{}/{}/{}",
             self.base_url(),
             collection,
@@ -283,37 +284,57 @@ impl FirebaseClient {
             subcollection
         );
 
-        let response = self
-            .client
-            .get(&url)
-            .bearer_auth(&token)
-            .send()
-            .await?;
+        let mut all_docs = Vec::new();
+        let mut page_token: Option<String> = None;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await?;
-            debug!("Firebase error: {}", body);
-            return Err(anyhow!("Firebase error: {}", status));
+        loop {
+            let mut url = format!("{}?pageSize=300", base_url);
+            if let Some(ref t) = page_token {
+                url.push_str(&format!("&pageToken={}", t));
+            }
+
+            let response = self
+                .client
+                .get(&url)
+                .bearer_auth(&token)
+                .send()
+                .await?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await?;
+                debug!("Firebase error: {}", body);
+                return Err(anyhow!("Firebase error: {}", status));
+            }
+
+            let result: Value = response.json().await?;
+            
+            if let Some(arr) = result["documents"].as_array() {
+                for doc in arr {
+                    if let Some(id) = doc["name"].as_str()
+                        .and_then(|name| name.split('/').last())
+                        .map(|s| s.to_string()) 
+                    {
+                        let data = from_firestore_document(doc);
+                        all_docs.push((id, data));
+                    }
+                }
+            }
+
+            // Check for next page
+            match result.get("nextPageToken") {
+                Some(t) => {
+                    if let Some(t_str) = t.as_str() {
+                        page_token = Some(t_str.to_string());
+                    } else {
+                        break;
+                    }
+                },
+                None => break,
+            }
         }
 
-        let result: Value = response.json().await?;
-        let docs = result["documents"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|doc| {
-                        let id = doc["name"].as_str()
-                            .and_then(|name| name.split('/').last())
-                            .map(|s| s.to_string())?;
-                        let data = from_firestore_document(doc);
-                        Some((id, data))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        Ok(docs)
+        Ok(all_docs)
     }
 
     /// Delete a document

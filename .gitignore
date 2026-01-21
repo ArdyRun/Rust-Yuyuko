@@ -7,3 +7,7 @@ firebase-key.json
 *.swp
 *.iml
 Yuyuko/
+
+# Deployment scripts (contain credentials)
+deploy_fast.sh
+askpass.sh
