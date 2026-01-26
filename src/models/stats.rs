@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// Stat entry for leaderboard
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct LeaderboardEntry {
     pub user_id: String,
     pub username: String,
@@ -17,6 +18,7 @@ pub struct LeaderboardEntry {
 
 /// Aggregated stats for a user
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 pub struct AggregatedStats {
     pub total_points: i64,
     pub total_sessions: i32,
@@ -25,6 +27,7 @@ pub struct AggregatedStats {
 
 /// Stats for a single media type
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 pub struct MediaTypeStats {
     pub total: f64,
     pub sessions: i32,
@@ -33,6 +36,7 @@ pub struct MediaTypeStats {
 
 /// Time period for leaderboard queries
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum TimePeriod {
     Weekly,
     Monthly,
@@ -41,6 +45,7 @@ pub enum TimePeriod {
 }
 
 impl TimePeriod {
+    #[allow(dead_code)]
     pub fn label(&self) -> &'static str {
         match self {
             TimePeriod::Weekly => "Weekly",

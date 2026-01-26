@@ -92,7 +92,8 @@ pub async fn react(
         .color(colors::INFO);
 
     // Generate emoji buttons
-    let components = generate_emoji_rows(0, channel_id, message_id);
+    let mut current_page = 0;
+    let components = generate_emoji_rows(current_page, channel_id, message_id);
 
     let reply = ctx.send(
         poise::CreateReply::default()
@@ -109,7 +110,6 @@ pub async fn react(
         .stream();
 
     use futures::StreamExt;
-    let mut current_page = 0;
 
     while let Some(interaction) = collector.next().await {
         let custom_id = &interaction.data.custom_id;

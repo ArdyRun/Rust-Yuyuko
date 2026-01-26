@@ -206,6 +206,7 @@ pub struct ImageInlineData {
 pub struct ImageGenerationResult {
     pub image_data: Vec<u8>,
     pub mime_type: String,
+    #[allow(dead_code)]
     pub text: Option<String>,
 }
 

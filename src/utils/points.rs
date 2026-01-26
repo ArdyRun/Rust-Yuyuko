@@ -28,6 +28,7 @@ pub fn calculate_points(media_type: &str, amount: f64) -> i64 {
 }
 
 /// Get the multiplier for a media type
+#[allow(dead_code)]
 pub fn get_multiplier(media_type: &str) -> f64 {
     points_multipliers()
         .get(media_type)

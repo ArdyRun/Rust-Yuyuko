@@ -399,6 +399,7 @@ struct StatEntry {
     label: String,
     total: f64,
     unit: String,
+    #[allow(dead_code)]
     sessions: i64,
     points: i64,
 }

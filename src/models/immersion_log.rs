@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// User info embedded in log
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct LogUser {
     pub id: String,
     pub username: String,
@@ -15,6 +16,7 @@ pub struct LogUser {
 
 /// Activity information
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct Activity {
     #[serde(rename = "type")]
     pub media_type: String,
@@ -33,6 +35,7 @@ pub struct Activity {
 
 /// Metadata from external APIs
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[allow(dead_code)]
 pub struct LogMetadata {
     pub thumbnail: Option<String>,
     pub duration: Option<i32>,
@@ -43,6 +46,7 @@ pub struct LogMetadata {
 
 /// VNDB info embedded in metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct VndbInfo {
     pub developer: Option<String>,
     pub released: Option<String>,
@@ -52,6 +56,7 @@ pub struct VndbInfo {
 
 /// Timestamp information
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct Timestamps {
     pub created: String,
     pub date: String,
@@ -61,6 +66,7 @@ pub struct Timestamps {
 
 /// Full immersion log entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct ImmersionLog {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -72,6 +78,7 @@ pub struct ImmersionLog {
 
 impl ImmersionLog {
     /// Create a new immersion log
+    #[allow(dead_code)]
     pub fn new(
         user_id: &str,
         username: &str,

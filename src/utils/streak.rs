@@ -21,7 +21,6 @@ pub fn calculate_streak(dates: &[String]) -> StreakResult {
     }
 
     let mut current_streak = 0;
-    let mut longest_streak = 0;
 
     // Parse dates into NaiveDate
     let parsed_dates: Vec<NaiveDate> = dates
@@ -57,7 +56,7 @@ pub fn calculate_streak(dates: &[String]) -> StreakResult {
     }
 
     // Calculate longest streak
-    longest_streak = calculate_longest_streak(&parsed_dates);
+    let mut longest_streak = calculate_longest_streak(&parsed_dates);
 
     // Current can never be longer than longest
     if current_streak > longest_streak {
@@ -112,10 +111,6 @@ fn calculate_longest_streak(dates: &[NaiveDate]) -> i32 {
     longest
 }
 
-/// Calculate streak for a specific media type
-pub fn calculate_streak_for_dates(dates: Vec<String>) -> StreakResult {
-    calculate_streak(&dates)
-}
 
 #[cfg(test)]
 mod tests {

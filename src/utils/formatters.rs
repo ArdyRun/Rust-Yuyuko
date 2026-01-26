@@ -1,6 +1,7 @@
 // Formatting utilities
 
 /// Format a number with locale-aware thousands separators
+#[allow(dead_code)]
 pub fn format_number(n: i64) -> String {
     let s = n.to_string();
     let mut result = String::new();
@@ -17,6 +18,7 @@ pub fn format_number(n: i64) -> String {
 }
 
 /// Format duration in minutes to human readable (e.g., "2h 30m")
+#[allow(dead_code)]
 pub fn format_duration(minutes: i64) -> String {
     if minutes < 60 {
         format!("{}m", minutes)
@@ -32,6 +34,7 @@ pub fn format_duration(minutes: i64) -> String {
 }
 
 /// Format points with suffix (e.g., "1.2k", "3.5M")
+#[allow(dead_code)]
 pub fn format_points_short(points: i64) -> String {
     if points >= 1_000_000 {
         format!("{:.1}M", points as f64 / 1_000_000.0)
@@ -43,6 +46,7 @@ pub fn format_points_short(points: i64) -> String {
 }
 
 /// Truncate string to max length with ellipsis
+#[allow(dead_code)]
 pub fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
@@ -52,6 +56,7 @@ pub fn truncate(s: &str, max_len: usize) -> String {
 }
 
 /// Format relative time (e.g., "2 hours ago")
+#[allow(dead_code)]
 pub fn format_relative_time(seconds_ago: i64) -> String {
     if seconds_ago < 60 {
         "just now".to_string()

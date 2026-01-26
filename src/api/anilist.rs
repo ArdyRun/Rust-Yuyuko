@@ -25,6 +25,7 @@ impl MediaType {
 pub struct AniListMedia {
     pub id: i32,
     pub title: String,
+    #[allow(dead_code)]
     pub title_romaji: Option<String>,
     pub image: Option<String>,
     pub url: String,

@@ -10,6 +10,7 @@ pub struct VideoInfo {
     pub title: String,
     pub duration_seconds: i32,
     pub thumbnail: Option<String>,
+    #[allow(dead_code)]
     pub channel: String,
 }
 
