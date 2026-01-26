@@ -1,15 +1,12 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use once_cell::sync::Lazy;
 use poise::serenity_prelude as serenity;
-use tracing::{info, warn, error};
-use dashmap::DashMap;
+use tracing::error;
 
-use crate::{Context, Data, Error};
+use crate::{Data, Error};
 
 // --- Constants (Hardcoded from Go) ---
 pub const KOTOBA_BOT_ID: serenity::UserId = serenity::UserId::new(251239170058616833);
-pub const QUIZ_CATEGORY_ID: serenity::ChannelId = serenity::ChannelId::new(1392514838118531132);
 // pub const QUIZ_SELECTOR_CHANNEL_ID: serenity::ChannelId = serenity::ChannelId::new(1392463011301691442); // Not strictly needed here but good for ref
 // const QUIZ_CHANNEL_TTL: u64 = 24 * 60 * 60; // 24 hours, handle via scheduled task later if needed
 

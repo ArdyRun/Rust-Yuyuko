@@ -2,10 +2,8 @@
 // Ported from commands/leaderboard.js
 
 use poise::serenity_prelude as serenity;
-use serde_json::Value;
 use tracing::error;
-
-use crate::utils::config::{colors, get_media_label};
+use crate::utils::config::colors;
 use crate::utils::points::calculate_points;
 use crate::{Context, Error};
 
@@ -162,7 +160,7 @@ pub async fn leaderboard(
     let mut leaderboard: Vec<LeaderboardEntry> = Vec::new();
 
     for user_doc in users {
-        let user_id = user_doc.get("_id").and_then(|v| v.as_str()).unwrap_or("");
+        let _user_id = user_doc.get("_id").and_then(|v| v.as_str()).unwrap_or("");
         let profile = user_doc.get("profile");
         let display_name = profile
             .and_then(|p| p.get("displayName"))
@@ -283,5 +281,6 @@ use chrono::Datelike;
 struct LeaderboardEntry {
     display_name: String,
     points: f64,
+    #[allow(dead_code)]
     amount: f64,
 }

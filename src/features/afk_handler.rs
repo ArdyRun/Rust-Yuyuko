@@ -2,7 +2,6 @@
 // Ported from events/afkHandler.js
 
 use poise::serenity_prelude as serenity;
-use tracing::error;
 
 use crate::commands::afk::{get_afk_data, remove_afk, is_afk};
 
@@ -18,7 +17,7 @@ pub async fn handle_afk_message(
 
     // Check if the message author is AFK - remove their status
     if is_afk(msg.author.id.get()).await {
-        if let Some(afk_data) = remove_afk(msg.author.id.get()).await {
+        if let Some(_afk_data) = remove_afk(msg.author.id.get()).await {
             let embed = serenity::CreateEmbed::new()
                 .color(0x2ecc71) // Green
                 .author(serenity::CreateEmbedAuthor::new(&msg.author.name)

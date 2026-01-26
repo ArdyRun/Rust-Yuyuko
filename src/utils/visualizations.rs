@@ -6,7 +6,7 @@ use image::{Rgba, RgbaImage, ImageBuffer, ImageEncoder};
 use std::collections::HashMap;
 use ab_glyph::{FontRef, PxScale};
 use imageproc::drawing::draw_text_mut;
-use charts_rs::{BarChart, HeatmapChart, Box as ChartBox, svg_to_png, Series, THEME_DARK};
+use charts_rs::{BarChart, Box as ChartBox, svg_to_png, THEME_DARK};
 
 // Embed BOLD font at compile time for heatmap (charts-rs handles its own fonts)
 const FONT_DATA: &[u8] = include_bytes!("../assets/NotoSansJP-Bold.ttf");
@@ -199,6 +199,7 @@ pub fn generate_heatmap(
 pub struct BarData {
     pub label: String,
     pub value: f64,
+    #[allow(dead_code)]
     pub media_type: String,
 }
 
@@ -214,8 +215,8 @@ pub fn generate_bar_chart(
     }
     
     // Prepare data for charts-rs
-    let values: Vec<f32> = data.iter().map(|d| d.value as f32).collect();
-    let labels: Vec<String> = data.iter().map(|d| d.label.clone()).collect();
+    let _values: Vec<f32> = data.iter().map(|d| d.value as f32).collect();
+    let _labels: Vec<String> = data.iter().map(|d| d.label.clone()).collect();
     
     // Create series
     let series_data: Vec<(String, Vec<f32>)> = data.iter()

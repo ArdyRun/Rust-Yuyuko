@@ -2,7 +2,7 @@
 // Ported from commands/export.js
 
 use poise::serenity_prelude as serenity;
-use chrono::{DateTime, Utc, Duration, NaiveDate};
+use chrono::{DateTime, Utc, Duration};
 use tracing::error;
 
 use crate::utils::config::get_media_label;

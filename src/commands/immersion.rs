@@ -7,14 +7,14 @@ use serde_json::json;
 use tracing::{debug, error};
 
 use crate::utils::config::{
-    colors, get_effective_date, get_effective_date_string, 
+    colors, get_effective_date, 
     get_media_label, get_unit
 };
 use crate::utils::points::calculate_points;
 use crate::utils::streak;
 use crate::api::{anilist, vndb, youtube};
 use crate::{Context, Error};
-use chrono::{DateTime, Utc, NaiveDate};
+use chrono::{DateTime, NaiveDate};
 
 /// Media type choices for the command
 #[derive(Debug, Clone, Copy, poise::ChoiceParameter)]
@@ -228,7 +228,7 @@ pub async fn immersion(
     };
 
     // Calculate points
-    let points = calculate_points(media_type_str, final_amount);
+    let _points = calculate_points(media_type_str, final_amount);
 
     // Build immersion log data
     let user_id = user.id.to_string();
@@ -287,7 +287,7 @@ pub async fn immersion(
     // Get existing user data
     let user_doc = firebase.get_document("users", &user_id).await?;
     
-    let (mut stats, existing_summary, existing_timestamps) = if let Some(ref doc) = user_doc {
+    let (mut stats, existing_summary, _existing_timestamps) = if let Some(ref doc) = user_doc {
         (
             doc.get("stats").cloned().unwrap_or(json!({})),
             doc.get("summary").cloned().unwrap_or(json!({})),
@@ -462,11 +462,6 @@ fn format_amount(n: f64) -> String {
         format!("{:.1}", n)
     }
 }
-
-use std::collections::HashSet;
-use std::sync::Arc;
-use crate::api::firebase::FirebaseClient;
-use chrono::Duration;
 
 // Local calculate_user_streak removed in favor of utils::streak::calculate_streak
 

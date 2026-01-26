@@ -75,7 +75,7 @@ async fn main() {
     dotenvy::dotenv().ok();
 
     let token = env::var("DISCORD_TOKEN").expect("DISCORD_TOKEN must be set");
-    let firebase_project_id = env::var("FIREBASE_PROJECT_ID")
+    let _firebase_project_id = env::var("FIREBASE_PROJECT_ID")
         .unwrap_or_else(|_| "yuyuko-bot".to_string());
     let owner_id = env::var("BOT_OWNER_ID").ok();
 

@@ -8,7 +8,7 @@ use futures::StreamExt;
 use tracing::{debug, error};
 
 use crate::{Context, Error};
-use crate::utils::config::{colors, get_media_label};
+use crate::utils::config::get_media_label;
 
 // ============ Data Structures ============
 
@@ -52,13 +52,6 @@ impl LogTimeframe {
         match self {
             LogTimeframe::Day => "24h",
             LogTimeframe::Week => "7d",
-        }
-    }
-    
-    fn label(&self) -> &'static str {
-        match self {
-            LogTimeframe::Day => "Last 24 Hours",
-            LogTimeframe::Week => "Last 7 Days",
         }
     }
 }
@@ -512,7 +505,7 @@ async fn fetch_user_logs(
     };
     
     // Query Firebase
-    let collection_path = format!("users/{}/immersion_logs", user_id);
+    let _collection_path = format!("users/{}/immersion_logs", user_id);
     
     match data.firebase.query_subcollection_with_ids("users", user_id, "immersion_logs").await {
         Ok(docs) => {

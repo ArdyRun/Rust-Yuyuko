@@ -2,15 +2,14 @@
 // Ported from commands/stat.js
 
 use poise::serenity_prelude as serenity;
-use serde_json::Value;
 use tracing::error;
 
-use crate::utils::config::{colors, get_effective_date_string, get_media_label, get_unit};
+use crate::utils::config::{colors, get_media_label, get_unit};
 use crate::utils::points::calculate_points;
 use crate::utils::visualizations::{generate_heatmap, generate_bar_chart, BarData};
 use crate::utils::streak;
 use crate::{Context, Error};
-use chrono::{Datelike, DateTime, Utc};
+use chrono::{Datelike, DateTime};
 
 /// Visualization type choices
 #[derive(Debug, Clone, Copy, poise::ChoiceParameter)]
@@ -429,10 +428,6 @@ fn format_number_f64(n: f64) -> String {
     }
 }
 
-use std::collections::HashSet;
-use std::sync::Arc;
-use crate::api::firebase::FirebaseClient;
-use chrono::Duration;
 
 // Local calculate_user_streaks removed in favor of utils::streak::calculate_streak
 

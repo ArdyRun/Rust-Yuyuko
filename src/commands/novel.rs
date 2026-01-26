@@ -3,7 +3,6 @@
 
 use poise::serenity_prelude as serenity;
 use serde::Deserialize;
-use std::sync::Arc;
 use std::time::Duration;
 use once_cell::sync::Lazy;
 use tracing::{error, info};
@@ -14,6 +13,7 @@ use crate::{Context, Error};
 /// Novel entry from novelList.json
 #[derive(Debug, Clone, Deserialize)]
 pub struct NovelEntry {
+    #[allow(dead_code)]
     pub id: String,
     pub title: String,
     pub url: String,
@@ -49,10 +49,6 @@ fn load_novels() -> Result<Vec<NovelEntry>, Box<dyn std::error::Error + Send + S
     Err("Could not find novelList.json".into())
 }
 
-/// Get total novel count
-pub fn get_novel_count() -> usize {
-    NOVELS.len()
-}
 
 const PAGE_SIZE: usize = 10;
 

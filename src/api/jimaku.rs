@@ -3,7 +3,6 @@
 
 use anyhow::Result;
 use serde::Deserialize;
-use tracing::debug;
 
 pub const JIMAKU_API_BASE: &str = "https://jimaku.cc/api";
 
@@ -21,6 +20,7 @@ pub struct JimakuEntry {
 #[derive(Debug, Clone, Deserialize)]
 pub struct JimakuFile {
     #[serde(default)]
+    #[allow(dead_code)]
     pub id: i32,
     #[serde(default)]
     pub name: String,
@@ -29,6 +29,7 @@ pub struct JimakuFile {
     #[serde(default)]
     pub url: String,
     #[serde(default)]
+    #[allow(dead_code)]
     pub last_modified: String,
 }
 

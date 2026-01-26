@@ -1,7 +1,7 @@
 use poise::serenity_prelude as serenity;
 use tracing::error;
 
-use crate::features::role_rank::{self, QUIZZES, QUIZ_CATEGORY_ID};
+use crate::features::role_rank::QUIZZES;
 use crate::{Context, Error};
 
 /// Manage Role Rank (Quiz) system

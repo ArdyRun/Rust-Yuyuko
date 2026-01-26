@@ -6,7 +6,6 @@ use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;

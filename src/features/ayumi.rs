@@ -8,7 +8,7 @@ use std::num::NonZeroUsize;
 use once_cell::sync::Lazy;
 use chrono::{DateTime, Utc};
 
-use crate::features::novel_recommender::{recommend_novels, smart_novel_search};
+use crate::features::novel_recommender::smart_novel_search;
 use crate::features::custom_prompt::get_user_custom_prompt;
 use crate::Data;
 use crate::models::guild::GuildConfig;
@@ -20,13 +20,17 @@ use crate::utils::ayumi_prompt::AYUMI_SYSTEM_PROMPT;
 /// User data with context for personalized responses
 #[derive(Debug, Clone)]
 pub struct UserData {
+    #[allow(dead_code)]
     pub user_id: u64,
+    #[allow(dead_code)]
     pub username: String,
+    #[allow(dead_code)]
     pub display_name: String,
     pub nickname: Option<String>,
     pub best_name: String,
     pub interaction_count: u32,
     pub last_interaction: DateTime<Utc>,
+    #[allow(dead_code)]
     pub conversation_history: Vec<ChatMessage>,
 }
 
