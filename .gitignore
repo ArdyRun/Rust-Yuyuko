@@ -12,3 +12,5 @@ Yuyuko/
 # Deployment scripts (contain credentials)
 deploy_fast.sh
 askpass.sh
+deploy.py
+deploy.tar.gz

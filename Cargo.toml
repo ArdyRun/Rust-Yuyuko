@@ -58,6 +58,7 @@ ab_glyph = "0.2.32"
 charts-rs = { version = "0.3.27", features = ["image-encoder"] }
 futures = "0.3"
 unicode-normalization = "0.1.25"
+html-escape = "0.2"
 
 [profile.release]
 opt-level = "z"     # Optimize for size

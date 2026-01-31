@@ -31,22 +31,54 @@ static NOVELS: Lazy<Vec<NovelEntry>> = Lazy::new(|| {
 
 /// Load novels from JSON file
 fn load_novels() -> Result<Vec<NovelEntry>, Box<dyn std::error::Error + Send + Sync>> {
+    // Log current working directory for debugging
+    if let Ok(cwd) = std::env::current_dir() {
+        info!("Novel loader - Current working directory: {}", cwd.display());
+    }
+
     // Try multiple possible paths
     let paths = [
         "Yuyuko/utils/novelList.json",
         "src/data/novelList.json",
         "data/novelList.json",
+        "./Yuyuko/utils/novelList.json",
+        "./src/data/novelList.json",
+        "./data/novelList.json",
     ];
 
+    let mut tried_paths = Vec::new();
+
     for path in paths {
-        if let Ok(content) = std::fs::read_to_string(path) {
-            let novels: Vec<NovelEntry> = serde_json::from_str(&content)?;
-            info!("Loaded {} novels from {}", novels.len(), path);
-            return Ok(novels);
+        tried_paths.push(path);
+        
+        match std::fs::read_to_string(path) {
+            Ok(content) => {
+                match serde_json::from_str::<Vec<NovelEntry>>(&content) {
+                    Ok(novels) => {
+                        info!("✓ Successfully loaded {} novels from {}", novels.len(), path);
+                        return Ok(novels);
+                    }
+                    Err(e) => {
+                        error!("✗ Found file at {} but failed to parse JSON: {:?}", path, e);
+                    }
+                }
+            }
+            Err(_) => {
+                // File not found at this path, continue to next
+            }
         }
     }
 
-    Err("Could not find novelList.json".into())
+    // If all paths failed, log detailed error
+    error!("Failed to load novelList.json. Tried paths:");
+    for path in &tried_paths {
+        error!("  - {}", path);
+    }
+    
+    Err(format!(
+        "Could not find novelList.json in any of these locations: {}",
+        tried_paths.join(", ")
+    ).into())
 }
 
 
@@ -58,13 +90,17 @@ pub async fn novel(
     ctx: Context<'_>,
     #[description = "Judul light novel (kanji/kana/romaji)"] title: String,
 ) -> Result<(), Error> {
+    info!("Novel command executed by user {} with query: {}", ctx.author().id, title);
     ctx.defer().await?;
 
     // Check if novels loaded
     if NOVELS.is_empty() {
-        ctx.say("Gagal memuat data novel. Silakan hubungi administrator.").await?;
+        error!("Novel database is empty - novelList.json was not loaded successfully");
+        ctx.say("Maaf, database novel belum bisa dimuat. Hubungi admin untuk cek log bot ya!").await?;
         return Ok(());
     }
+
+    info!("Searching {} novels for query: {}", NOVELS.len(), title);
 
     // Search novels
     let query = title.to_lowercase();

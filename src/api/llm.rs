@@ -45,8 +45,8 @@ pub async fn completion_openrouter(
     messages: Vec<ChatMessage>,
 ) -> anyhow::Result<String> {
     let api_key = std::env::var("OPENROUTER_API_KEY")?;
-    // Legacy implementation used xiaomi/mimo-v2-flash:free
-    let model = "xiaomi/mimo-v2-flash:free"; 
+    // Updated to use openai/gpt-oss-120b:free (xiaomi model is no longer free)
+    let model = "openai/gpt-oss-120b:free"; 
     
     let mut all_messages = vec![ChatMessage {
         role: "system".to_string(),

@@ -119,10 +119,64 @@ pub async fn immersion(
     let mut vndb_url = None;
     let mut source = "manual";
     let mut vndb_metadata = None;
+    let mut warning_msg = None;
 
-    // 1. Handle Listening (YouTube)
+    // 1. Handle Listening (YouTube) - Interactive flow
     if let MediaType::Listening = media_type {
-        if let Some(url_str) = url {
+        let url_str = if let Some(ref u) = url {
+            // URL provided directly via parameter
+            Some(u.clone())
+        } else {
+            // No URL provided - prompt user to paste in chat
+            let prompt_embed = serenity::CreateEmbed::new()
+                .title("Input YouTube Link")
+                .description("Paste your YouTube link below\n\n*Timeout in 60 seconds*")
+                .color(colors::IMMERSION);
+            
+            let prompt_reply = ctx.send(poise::CreateReply::default().embed(prompt_embed)).await?;
+            
+            // Wait for user's next message in this channel
+            let channel_id = ctx.channel_id();
+            let author_id = ctx.author().id;
+            let http = ctx.serenity_context().http.clone();
+            
+            // Use serenity's message collector
+            use futures::StreamExt;
+            let mut collector = serenity::collector::MessageCollector::new(ctx.serenity_context().shard.clone())
+                .channel_id(channel_id)
+                .author_id(author_id)
+                .timeout(std::time::Duration::from_secs(60))
+                .stream();
+            
+            let user_url_msg = collector.next().await;
+            
+            if let Some(msg) = user_url_msg {
+                let url_content = msg.content.clone();
+                
+                // Delete user's message - requires Manage Messages permission
+                if let Err(e) = msg.delete(&http).await {
+                    error!("Failed to delete user YouTube link message: {:?}", e);
+                    // If it's a permission error, we can't do much but log it.
+                    warning_msg = Some("⚠️ Notice: Could not auto-delete link (Missing 'Manage Messages' permission)");
+                }
+                
+                // Delete prompt embed using poise's handle
+                let _ = prompt_reply.delete(ctx).await;
+                
+                Some(url_content)
+            } else {
+                // Timeout - update embed
+                let timeout_embed = serenity::CreateEmbed::new()
+                    .title("Timeout")
+                    .description("No YouTube link received. Please try again.")
+                    .color(0xFF0000);
+                
+                let _ = prompt_reply.edit(ctx, poise::CreateReply::default().embed(timeout_embed)).await;
+                return Ok(());
+            }
+        };
+        
+        if let Some(url_str) = url_str {
             if let Some(video_id) = youtube::extract_video_id(&url_str) {
                 let yt_key = std::env::var("YOUTUBE_API_KEY").unwrap_or_default();
                 match youtube::get_video_info(&data.http_client, &yt_key, &video_id).await {
@@ -135,6 +189,35 @@ pub async fn immersion(
                     },
                     Ok(None) => debug!("Video not found"),
                     Err(e) => error!("YouTube API error: {:?}", e),
+                }
+            }
+        }
+    }
+
+    // 1.5. Handle Reading/ReadingTime with URL (Article/News)
+    if matches!(media_type, MediaType::Reading | MediaType::ReadingTime) {
+        if let Some(ref url_str) = url {
+            // Validate URL
+            if url_str.starts_with("http://") || url_str.starts_with("https://") {
+                // Fetch title from webpage
+                match fetch_page_title(&data.http_client, url_str).await {
+                    Ok(Some(page_title)) => {
+                        raw_title = page_title;
+                        log_url = Some(url_str.clone());
+                        source = "web";
+                    }
+                    Ok(None) => {
+                        debug!("Could not extract title from URL");
+                        // Still set the URL even if title extraction failed
+                        log_url = Some(url_str.clone());
+                        source = "web";
+                    }
+                    Err(e) => {
+                        error!("Failed to fetch page title: {:?}", e);
+                        // Still set the URL even if fetch failed
+                        log_url = Some(url_str.clone());
+                        source = "web";
+                    }
                 }
             }
         }
@@ -425,26 +508,38 @@ pub async fn immersion(
     };
 
     // Build response embed matching Node.js format
-    let embed = serenity::CreateEmbed::new()
-        .title(format!("{} Logged", label))
-        .description(if raw_title != "-" {
-            format!("**{}**", raw_title)
-        } else {
-            String::new()
-        })
-        .field("Progress", format!("+{} {}", format_amount(amount), unit), true)
+    let mut embed = serenity::CreateEmbed::new()
+        .author(serenity::CreateEmbedAuthor::new(format!("{} Logged", label)))
+        .title(if raw_title != "-" { raw_title.clone() } else { String::new() })
+        .field("Progress", format!("+{} {}", format_amount(final_amount), unit), true)
         .field("Total", format!("{} {}", format_amount(updated_total), unit), true)
         .field("Streak", format!("{} day{}", global_streak, if global_streak == 1 { "" } else { "s" }), true)
         .color(colors::IMMERSION)
-        .footer(serenity::CreateEmbedFooter::new(format!(
-            "{} | {}",
-            user.name, label
-        )))
+        .footer(serenity::CreateEmbedFooter::new(if let Some(warn) = warning_msg {
+            format!("{} | {}\n{}", user.name, label, warn)
+        } else {
+            format!("{} | {}", user.name, label)
+        }))
         .thumbnail(thumbnail.unwrap_or_else(|| user.face()));
 
-    // Add comment if provided
+    // Add clickable URL if available (YouTube, AniList, VNDB)
+    if let Some(ref url) = log_url {
+        embed = embed.url(url);
+    } else if let Some(ref url) = anilist_url {
+        embed = embed.url(url);
+    } else if let Some(ref url) = vndb_url {
+        embed = embed.url(url);
+    }
+
+    // Add comment if provided (Discord limit: 1024 characters for field value)
     let embed = if let Some(ref c) = comment {
-        embed.field("Comment", c, false)
+        const MAX_COMMENT_LENGTH: usize = 1000; // Leave room for truncation message
+        let comment_text = if c.len() > MAX_COMMENT_LENGTH {
+            format!("{}... (dipotong, terlalu panjang)", &c[0..MAX_COMMENT_LENGTH])
+        } else {
+            c.clone()
+        };
+        embed.field("Comment", comment_text, false)
     } else {
         embed
     };
@@ -546,4 +641,57 @@ async fn autocomplete_title(
     }
 
     results.into_iter()
+}
+
+/// Helper function to fetch page title from URL
+async fn fetch_page_title(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
+    // Fetch the webpage
+    let response = client
+        .get(url)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await?;
+    
+    if !response.status().is_success() {
+        return Ok(None);
+    }
+    
+    let html = response.text().await?;
+    
+    // Simple regex to extract <title> tag content
+    if let Some(start) = html.find("<title>") {
+        if let Some(end) = html[start..].find("</title>") {
+            let title_start = start + 7; // Length of "<title>"
+            let title_end = start + end;
+            let title = html[title_start..title_end].trim();
+            
+            // Decode HTML entities if needed (basic decoding)
+            let decoded = html_escape::decode_html_entities(title).to_string();
+            
+            return Ok(Some(decoded));
+        }
+    }
+    
+    // Fallback: try og:title meta tag
+    if let Some(og_title) = extract_meta_property(&html, "og:title") {
+        return Ok(Some(og_title));
+    }
+    
+    Ok(None)
+}
+
+/// Helper to extract meta property content
+fn extract_meta_property(html: &str, property: &str) -> Option<String> {
+    let pattern = format!(r#"<meta property="{}" content=""#, property);
+    if let Some(start) = html.find(&pattern) {
+        let content_start = start + pattern.len();
+        if let Some(end) = html[content_start..].find('"') {
+            let content = &html[content_start..content_start + end];
+            return Some(html_escape::decode_html_entities(content).to_string());
+        }
+    }
+    None
 }
