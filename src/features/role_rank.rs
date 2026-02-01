@@ -1,9 +1,10 @@
-use std::collections::HashMap;
 use once_cell::sync::Lazy;
 use poise::serenity_prelude as serenity;
+use std::collections::HashMap;
 use tracing::error;
 
 use crate::{Data, Error};
+use std::env;
 
 // --- Constants (Hardcoded from Go) ---
 pub const KOTOBA_BOT_ID: serenity::UserId = serenity::UserId::new(251239170058616833);
@@ -30,6 +31,7 @@ pub struct QuizSession {
     pub quiz_id: String,
     pub thread_id: serenity::ChannelId, // The private channel ID
     pub started: bool,
+    pub active_attempt: bool,
     pub progress: usize,
 }
 
@@ -37,17 +39,22 @@ pub struct QuizSession {
 
 pub static QUIZZES: Lazy<HashMap<String, QuizInfo>> = Lazy::new(|| {
     let mut m = HashMap::new();
-    
-    m.insert("hiragana_katakana".to_string(), QuizInfo {
-        label: "Kanji Wakaran (漢字わからん)",
-        level: 0,
-        description: "Hiragana + Katakana Quiz",
-        value: "hiragana_katakana",
-        role_id: serenity::RoleId::new(1392065087216291891),
-        commands: &["k!quiz hiragana+katakana nd mmq=10 dauq=1 font=5 atl=16 color=#f173ff size=100"],
-        deck_names: &["Multiple Deck Quiz"],
-        score_limits: &["10"],
-    });
+
+    m.insert(
+        "hiragana_katakana".to_string(),
+        QuizInfo {
+            label: "Kanji Wakaran (漢字わからん)",
+            level: 0,
+            description: "Hiragana + Katakana Quiz",
+            value: "hiragana_katakana",
+            role_id: serenity::RoleId::new(1392065087216291891),
+            commands: &[
+                "k!quiz hiragana+katakana nd mmq=10 dauq=1 font=5 atl=16 color=#f173ff size=100",
+            ],
+            deck_names: &["Multiple Deck Quiz"],
+            score_limits: &["10"],
+        },
+    );
 
     m.insert("Level_1".to_string(), QuizInfo {
         label: "Shoshinsha (初心者)",
@@ -89,11 +96,11 @@ pub static QUIZZES: Lazy<HashMap<String, QuizInfo>> = Lazy::new(|| {
         value: "Level_4",
         role_id: serenity::RoleId::new(1392066020235153408),
         commands: &[
-            "k!quiz gn2 nd 20 mmq=4 atl=60",
-            "k!quiz jpdb3k5k 35 hardcore nd mmq=10 dauq=1 font=5 atl=16 color=#f173ff size=100 effect=antiocr"
+            "k!quiz gn2 nd 1 mmq=4 atl=60",
+            "k!quiz jpdb3k5k 1 hardcore nd mmq=10 dauq=1 font=5 atl=16 color=#f173ff size=100 effect=antiocr"
         ],
         deck_names: &["JLPT N2 Grammar Quiz", "jpdb3k5k"],
-        score_limits: &["20", "35"],
+        score_limits: &["1", "1"],
     });
 
     m.insert("Level_5".to_string(), QuizInfo {
@@ -155,14 +162,22 @@ pub async fn handle_interaction(
     let quiz_id = match &interaction.data.kind {
         serenity::ComponentInteractionDataKind::StringSelect { values } => values.first(),
         _ => None,
-    }.ok_or("No quiz selected")?;
-    
+    }
+    .ok_or("No quiz selected")?;
+
     let quiz = match QUIZZES.get(quiz_id) {
         Some(q) => q,
         None => {
-            let _ = interaction.create_response(ctx, serenity::CreateInteractionResponse::Message(
-                serenity::CreateInteractionResponseMessage::new().content("Quiz not found!").ephemeral(true)
-            )).await;
+            let _ = interaction
+                .create_response(
+                    ctx,
+                    serenity::CreateInteractionResponse::Message(
+                        serenity::CreateInteractionResponseMessage::new()
+                            .content("Quiz not found!")
+                            .ephemeral(true),
+                    ),
+                )
+                .await;
             return Ok(());
         }
     };
@@ -172,11 +187,20 @@ pub async fn handle_interaction(
         // Verify if channel still exists
         match ctx.http.get_channel(session.thread_id).await {
             Ok(_) => {
-                let _ = interaction.create_response(ctx, serenity::CreateInteractionResponse::Message(
-                    serenity::CreateInteractionResponseMessage::new().content("You already have an active quiz session! Finish it first.").ephemeral(true)
-                )).await;
+                let _ = interaction
+                    .create_response(
+                        ctx,
+                        serenity::CreateInteractionResponse::Message(
+                            serenity::CreateInteractionResponseMessage::new()
+                                .content(
+                                    "You already have an active quiz session! Finish it first.",
+                                )
+                                .ephemeral(true),
+                        ),
+                    )
+                    .await;
                 return Ok(());
-            },
+            }
             Err(_) => {
                 // Channel gone, remove session
                 drop(session); // release lock
@@ -186,9 +210,16 @@ pub async fn handle_interaction(
     }
 
     // Create Private Channel
-    let channel_name = format!("quiz-{}-{}", 
-        user.name.to_lowercase(), 
-        quiz.label.split('(').next().unwrap_or("").trim().replace(' ', "-").to_lowercase()
+    let channel_name = format!(
+        "quiz-{}-{}",
+        user.name.to_lowercase(),
+        quiz.label
+            .split('(')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .replace(' ', "-")
+            .to_lowercase()
     );
 
     let permission_overwrites = vec![
@@ -198,37 +229,56 @@ pub async fn handle_interaction(
             kind: serenity::PermissionOverwriteType::Role(serenity::RoleId::new(guild_id.get())),
         },
         serenity::PermissionOverwrite {
-            allow: serenity::Permissions::VIEW_CHANNEL | serenity::Permissions::SEND_MESSAGES | serenity::Permissions::READ_MESSAGE_HISTORY,
+            allow: serenity::Permissions::VIEW_CHANNEL
+                | serenity::Permissions::SEND_MESSAGES
+                | serenity::Permissions::READ_MESSAGE_HISTORY,
             deny: serenity::Permissions::empty(),
             kind: serenity::PermissionOverwriteType::Member(user.id),
         },
         serenity::PermissionOverwrite {
-            allow: serenity::Permissions::VIEW_CHANNEL | serenity::Permissions::SEND_MESSAGES | serenity::Permissions::READ_MESSAGE_HISTORY,
+            allow: serenity::Permissions::VIEW_CHANNEL
+                | serenity::Permissions::SEND_MESSAGES
+                | serenity::Permissions::READ_MESSAGE_HISTORY,
             deny: serenity::Permissions::empty(),
             kind: serenity::PermissionOverwriteType::Member(KOTOBA_BOT_ID),
         },
         serenity::PermissionOverwrite {
-            allow: serenity::Permissions::VIEW_CHANNEL | serenity::Permissions::SEND_MESSAGES | serenity::Permissions::READ_MESSAGE_HISTORY,
+            allow: serenity::Permissions::VIEW_CHANNEL
+                | serenity::Permissions::SEND_MESSAGES
+                | serenity::Permissions::READ_MESSAGE_HISTORY,
             deny: serenity::Permissions::empty(),
             kind: serenity::PermissionOverwriteType::Member(ctx.cache.current_user().id),
-        }
+        },
     ];
 
     // Get configured category ID or error
     let category_id = {
         if let Some(config) = data.guild_configs.get(&guild_id.to_string()) {
-            config.quiz_category_id.as_ref().and_then(|id| id.parse::<u64>().ok()).map(serenity::ChannelId::new)
+            config
+                .quiz_category_id
+                .as_ref()
+                .and_then(|id| id.parse::<u64>().ok())
+                .map(serenity::ChannelId::new)
         } else {
-             None
+            None
         }
     };
-    
+
     let category_id = match category_id {
         Some(id) => id,
         None => {
-             let _ = interaction.create_response(ctx, serenity::CreateInteractionResponse::Message(
-                serenity::CreateInteractionResponseMessage::new().content("Quiz Category not configured! Ask admin to set it via /config.").ephemeral(true)
-            )).await;
+            let _ = interaction
+                .create_response(
+                    ctx,
+                    serenity::CreateInteractionResponse::Message(
+                        serenity::CreateInteractionResponseMessage::new()
+                            .content(
+                                "Quiz Category not configured! Ask admin to set it via /config.",
+                            )
+                            .ephemeral(true),
+                    ),
+                )
+                .await;
             return Ok(());
         }
     };
@@ -242,21 +292,32 @@ pub async fn handle_interaction(
         Ok(c) => c,
         Err(e) => {
             error!("Failed to create quiz channel: {:?}", e);
-            let _ = interaction.create_response(ctx, serenity::CreateInteractionResponse::Message(
-                serenity::CreateInteractionResponseMessage::new().content("Failed to create private channel!").ephemeral(true)
-            )).await;
+            let _ = interaction
+                .create_response(
+                    ctx,
+                    serenity::CreateInteractionResponse::Message(
+                        serenity::CreateInteractionResponseMessage::new()
+                            .content("Failed to create private channel!")
+                            .ephemeral(true),
+                    ),
+                )
+                .await;
             return Ok(());
         }
     };
 
     // Store Session
-    data.role_rank_sessions.insert(user.id, QuizSession {
-        user_id: user.id,
-        quiz_id: quiz_id.clone(),
-        thread_id: channel.id,
-        started: false,
-        progress: 0,
-    });
+    data.role_rank_sessions.insert(
+        user.id,
+        QuizSession {
+            user_id: user.id,
+            quiz_id: quiz_id.clone(),
+            thread_id: channel.id,
+            started: false,
+            active_attempt: false,
+            progress: 0,
+        },
+    );
 
     // Send Welcome Message
     let command_text = quiz.commands[0];
@@ -294,56 +355,183 @@ pub async fn handle_message(
     // 1. Handle User Starting Quiz
     if !msg.author.bot {
         if msg.content.starts_with("k!quiz") {
-             // Check if this is an active session channel
-             // We need to find if this channel belongs to ANY active session for THIS user
-             if let Some(mut session) = data.role_rank_sessions.get_mut(&msg.author.id) {
-                 if session.thread_id == msg.channel_id {
-                     session.started = true;
-                     let _ = msg.channel_id.say(&ctx.http, "Quiz dimulai! Tunggu Kotoba Bot untuk memberikan pertanyaan...").await;
-                 }
-             }
+            // Check if this is an active session channel
+            // We need to find if this channel belongs to ANY active session for THIS user
+            if let Some(mut session) = data.role_rank_sessions.get_mut(&msg.author.id) {
+                if session.thread_id == msg.channel_id {
+                    let quiz = match QUIZZES.get(&session.quiz_id) {
+                        Some(q) => q,
+                        None => return Ok(()),
+                    };
+
+                    let expected_command = quiz.commands[session.progress];
+
+                    if validate_command(&msg.content, expected_command) {
+                        session.started = true;
+                        session.active_attempt = true;
+                        let _ = msg
+                            .channel_id
+                            .say(
+                                &ctx.http,
+                                "Command Valid! Menunggu hasil dari Kotoba Bot...",
+                            )
+                            .await;
+                    } else {
+                        session.active_attempt = false; // Invalidate previous attempt if any
+                        let _ = msg.reply(&ctx.http, format!(
+                            "**Command Tidak Sesuai**\nUntuk role ini, kamu wajib menggunakan command yang persis sama:\n```\n{}\n```\nJika kamu sedang menjalankan quiz, selesaikan dulu atau ketik `k!quiz stop` lalu paste commandnya lagi.", 
+                            expected_command
+                        )).await;
+                    }
+                }
+            }
         }
-        
         // Handle a!del (manual delete)
-         else if msg.content.starts_with("a!del") {
+        else if msg.content.starts_with("a!del") {
             let channel = match msg.channel(&ctx.http).await {
                 Ok(c) => c.guild().map(|gc| gc),
                 Err(_) => None,
             };
 
             if let Some(gc) = channel {
-                 let guild_id = gc.guild_id.to_string();
-                 let category_id = if let Some(config) = data.guild_configs.get(&guild_id) {
-                      config.quiz_category_id.as_ref().and_then(|id| id.parse::<u64>().ok()).map(serenity::ChannelId::new)
-                 } else { None };
+                let guild_id = gc.guild_id.to_string();
+                let category_id = if let Some(config) = data.guild_configs.get(&guild_id) {
+                    config
+                        .quiz_category_id
+                        .as_ref()
+                        .and_then(|id| id.parse::<u64>().ok())
+                        .map(serenity::ChannelId::new)
+                } else {
+                    None
+                };
 
-                 if let Some(cat_id) = category_id {
-                      if gc.parent_id == Some(cat_id) {
-                          // Check if this is the configured selector channel
-                      if let Some(config) = data.guild_configs.get(&guild_id) {
-                          if let Some(selector_id) = &config.quiz_channel_id {
-                              if gc.id.to_string() == *selector_id {
-                                  let _ = msg.reply(&ctx.http, "Cannot delete main selector channel (Protected via Config).").await;
-                                  return Ok(());
-                              }
-                          }
-                      }
-                      
-                      let _ = msg.reply(&ctx.http, "Deleting channel in 3 seconds...").await;
-                      tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                      
-                      // Remove session first
-                      // Use retain to remove any session pointing to this channel ID
-                      data.role_rank_sessions.retain(|_, v| v.thread_id != gc.id);
-                      
-                      if let Err(e) = gc.delete(&ctx.http).await {
-                          error!("Failed to delete channel: {:?}", e);
-                          let _ = msg.reply(&ctx.http, format!("Failed to delete channel: {}", e)).await;
-                      }
-                 } else {
-                     let _ = msg.reply(&ctx.http, "This command only works in quiz channels.").await;
-                 }
-              } // closing category_id
+                if let Some(cat_id) = category_id {
+                    if gc.parent_id == Some(cat_id) {
+                        // Check if this is the configured selector channel
+                        if let Some(config) = data.guild_configs.get(&guild_id) {
+                            if let Some(selector_id) = &config.quiz_channel_id {
+                                if gc.id.to_string() == *selector_id {
+                                    let _ = msg.reply(&ctx.http, "Cannot delete main selector channel (Protected via Config).").await;
+                                    return Ok(());
+                                }
+                            }
+                        }
+
+                        let _ = msg
+                            .reply(&ctx.http, "Deleting channel in 3 seconds...")
+                            .await;
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+                        // Remove session first
+                        // Use retain to remove any session pointing to this channel ID
+                        data.role_rank_sessions.retain(|_, v| v.thread_id != gc.id);
+
+                        if let Err(e) = gc.delete(&ctx.http).await {
+                            error!("Failed to delete channel: {:?}", e);
+                            let _ = msg
+                                .reply(&ctx.http, format!("Failed to delete channel: {}", e))
+                                .await;
+                        }
+                    } else {
+                        let _ = msg
+                            .reply(&ctx.http, "This command only works in quiz channels.")
+                            .await;
+                    }
+                } // closing category_id
+            }
+        }
+        // Handle a!clear <user_id> (Manual Role Reset)
+        else if msg.content.starts_with("a!clear") {
+            // 1. Permission Check
+            let mut is_authorized = false;
+
+            // Check Owner
+            if let Ok(owner_id) = env::var("BOT_OWNER_ID") {
+                if msg.author.id.to_string() == owner_id {
+                    is_authorized = true;
+                }
+            }
+
+            // Check Manage Guild
+            if !is_authorized {
+                if let Some(guild_id) = msg.guild_id {
+                    if let Ok(member) = guild_id.member(&ctx.http, msg.author.id).await {
+                        // Standard permission check
+                        if let Some(guild) = guild_id.to_guild_cached(&ctx.cache) {
+                            for role_id in &member.roles {
+                                if let Some(role) = guild.roles.get(role_id) {
+                                    if role
+                                        .permissions
+                                        .contains(serenity::Permissions::MANAGE_GUILD)
+                                        || role
+                                            .permissions
+                                            .contains(serenity::Permissions::ADMINISTRATOR)
+                                    {
+                                        is_authorized = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !is_authorized {
+                let _ = msg.reply(&ctx.http, "**Access Denied**: You need `MANAGE_GUILD` permissions or be the Bot Owner.").await;
+                return Ok(());
+            }
+
+            // 2. Parse User ID
+            let args: Vec<&str> = msg.content.split_whitespace().collect();
+            if args.len() < 2 {
+                let _ = msg
+                    .reply(&ctx.http, "Usage: `a!clear <user_id>` (or mention)")
+                    .await;
+                return Ok(());
+            }
+
+            let target_str = args[1].trim_start_matches("<@").trim_end_matches(">");
+            let target_id = match target_str.parse::<u64>() {
+                Ok(id) => serenity::UserId::new(id),
+                Err(_) => {
+                    let _ = msg.reply(&ctx.http, "Invalid User ID format.").await;
+                    return Ok(());
+                }
+            };
+
+            // 3. Remove Roles
+            if let Some(guild_id) = msg.guild_id {
+                match guild_id.member(&ctx.http, target_id).await {
+                    Ok(member) => {
+                        let mut removed_count = 0;
+                        for quiz in QUIZZES.values() {
+                            if member.roles.contains(&quiz.role_id) {
+                                if let Err(e) = member.remove_role(&ctx.http, quiz.role_id).await {
+                                    error!(
+                                        "Failed to remove role {} for user {}: {:?}",
+                                        quiz.role_id, target_id, e
+                                    );
+                                } else {
+                                    removed_count += 1;
+                                }
+                            }
+                        }
+
+                        let _ = msg
+                            .reply(
+                                &ctx.http,
+                                format!(
+                                    "✅ **Reset Complete**: Removed {} quiz roles from <@{}>.",
+                                    removed_count, target_id
+                                ),
+                            )
+                            .await;
+                    }
+                    Err(_) => {
+                        let _ = msg.reply(&ctx.http, "User not found in this server.").await;
+                    }
+                }
             }
         }
         return Ok(());
@@ -357,22 +545,47 @@ pub async fn handle_message(
     Ok(())
 }
 
-async fn handle_kotoba_message(ctx: &serenity::Context, msg: &serenity::Message, data: &Data) -> Result<(), Error> {
-    if msg.embeds.is_empty() { return Ok(()); }
+async fn handle_kotoba_message(
+    ctx: &serenity::Context,
+    msg: &serenity::Message,
+    data: &Data,
+) -> Result<(), Error> {
+    if msg.embeds.is_empty() {
+        return Ok(());
+    }
 
     for embed in &msg.embeds {
-        if let Some(desc) = &embed.description {
-            if !desc.contains("Congratulations!") { continue; }
-        } else { continue; }
+        // Check for "Congratulations!" in Title OR Description
+        let mut is_congrats = false;
+
+        if let Some(title) = &embed.title {
+            if title.contains("Congratulations!") {
+                is_congrats = true;
+            }
+        }
+        if !is_congrats {
+            if let Some(desc) = &embed.description {
+                if desc.contains("Congratulations!") {
+                    is_congrats = true;
+                }
+            }
+        }
+
+        if !is_congrats {
+            continue;
+        }
 
         // Identify User & Session
         // We have to iterate sessions to find one that matches channel_id AND is started
         let user_id;
         {
             // Scope to release Ref
-            let session_entry = data.role_rank_sessions.iter()
-                .find(|entry| entry.value().thread_id == msg.channel_id && entry.value().started);
-            
+            let session_entry = data.role_rank_sessions.iter().find(|entry| {
+                entry.value().thread_id == msg.channel_id
+                    && entry.value().started
+                    && entry.value().active_attempt
+            });
+
             if let Some(entry) = session_entry {
                 user_id = *entry.key();
             } else {
@@ -397,107 +610,154 @@ async fn handle_kotoba_message(ctx: &serenity::Context, msg: &serenity::Message,
         // --- Validate Embed ---
         let expected_deck = quiz.deck_names[session.progress].to_lowercase();
         let expected_score = quiz.score_limits[session.progress].to_lowercase();
-        
-        // 1. Check Deck Name (from Title)
-        let title_deck = embed.title.clone().unwrap_or_default().trim_end_matches(" Ended").to_lowercase();
-        
-        // 2. Check Score (from Fields or Description)
-        let mut actual_score = String::new();
-        
-        for field in &embed.fields {
-            if field.name.to_lowercase().contains("score limit") {
-                actual_score = field.value.to_lowercase();
-                break;
-            }
-        }
-        
-        if actual_score.is_empty() {
-            if let Some(desc) = &embed.description {
-                let lower_desc = desc.to_lowercase();
-                 if let Some(idx) = lower_desc.find("score limit of ") {
-                     let rest = &lower_desc[idx + 15..];
-                     actual_score = rest.split_whitespace().next().unwrap_or("").to_string();
-                 }
+
+        // 1. Check if Title indicates Score Limit Reached (This overrides Deck Name check)
+        // Title format: "The score limit of <SCORE> was reached by <USER>. Congratulations!"
+        let title = embed.title.clone().unwrap_or_default();
+        let mut score_limit_reached = false;
+
+        if title.contains("The score limit of") && title.contains("was reached") {
+            // Extract score from title
+            let parts: Vec<&str> = title.split_whitespace().collect();
+            for (i, word) in parts.iter().enumerate() {
+                if *word == "of" && i + 1 < parts.len() {
+                    let s = parts[i + 1];
+                    if s == expected_score {
+                        score_limit_reached = true;
+                    }
+                }
             }
         }
 
-        // Clean score (take first part if includes spaces/text)
-        actual_score = actual_score.split_whitespace().next().unwrap_or("").to_string();
+        if score_limit_reached {
+            // Success! Title confirms score limit was reached.
+            // We skip deck name check because the title is overwritten.
+        } else {
+            // Fallback to standard check (Deck Name + Score in fields/desc)
+            // 1. Check Deck Name (from Title)
+            let title_deck = title.trim_end_matches(" Ended").to_lowercase();
 
-        if title_deck != expected_deck || actual_score != expected_score {
-            let _ = msg.channel_id.say(&ctx.http, "Stats tidak sesuai dengan persyaratan quiz ini. Pastikan command benar.").await;
-            return Ok(());
+            // 2. Check Score (from Fields or Description)
+            let mut actual_score = String::new();
+
+            for field in &embed.fields {
+                if field.name.to_lowercase().contains("score limit") {
+                    actual_score = field.value.to_lowercase();
+                    break;
+                }
+            }
+
+            if actual_score.is_empty() {
+                if let Some(desc) = &embed.description {
+                    let lower_desc = desc.to_lowercase();
+                    if let Some(idx) = lower_desc.find("score limit of ") {
+                        let rest = &lower_desc[idx + 15..];
+                        actual_score = rest.split_whitespace().next().unwrap_or("").to_string();
+                    }
+                }
+            }
+
+            // Clean score (take first part if includes spaces/text)
+            actual_score = actual_score
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_string();
+
+            if !title_deck.contains(&expected_deck) || actual_score != expected_score {
+                // Double check if strict deck check is too strict or if title mismatch provided
+                if !score_limit_reached {
+                    let _ = msg.channel_id.say(&ctx.http, 
+                        format!("⚠️ **Validasi Gagal**\nDeck atau Score tidak sesuai.\nExpected Deck: {}\nExpected Score: {}\nDetected Deck: {}\nDetected Score: {}", 
+                        expected_deck, expected_score, title_deck, actual_score)
+                    ).await;
+                    return Ok(());
+                }
+            }
         }
 
         // --- Success ---
-        
+
         // Check if there are more stages
         if session.progress + 1 < quiz.commands.len() {
             session.progress += 1;
             let next_cmd = quiz.commands[session.progress];
-            
-            let _ = msg.channel_id.say(&ctx.http, format!("Stage selesai! Lanjut ke tahap berikutnya:\n```{}```", next_cmd)).await;
+
+            let _ = msg
+                .channel_id
+                .say(
+                    &ctx.http,
+                    format!(
+                        "Stage selesai! Lanjut ke tahap berikutnya:\n```{}```",
+                        next_cmd
+                    ),
+                )
+                .await;
         } else {
             // All stages complete!
             // Assign Role
             session.started = false; // Stop tracking
-            
+            session.active_attempt = false;
+
             let guild_id = msg.guild_id.unwrap();
             let member = guild_id.member(&ctx.http, user_id).await?;
-            
+
             // Check Current Roles (Prevent Downgrade/Duplicate)
             // Implementation simplified: just add role and remove old ones if we implement exclusive logic later.
             // For now, based on Go code:
-            
-            // Go code logic: 
+
+            // Go code logic:
             // 1. Get current level from owned roles.
             // 2. If already same level -> Done.
             // 3. If higher level -> "Downgrade not allowed".
             // 4. Else -> Remove old role, Add new role.
-            
+
             let current_level = get_current_quiz_level(&member);
-            
+
             if current_level == quiz.level {
-                 let _ = msg.channel_id.say(&ctx.http, format!("Kamu sudah memiliki role **{}**. Tidak ada perubahan.\nChannel akan dihapus dalam 30 detik.", quiz.label)).await;
+                let _ = msg.channel_id.say(&ctx.http, format!("Kamu sudah memiliki role **{}**. Tidak ada perubahan.\nChannel akan dihapus dalam 30 detik.", quiz.label)).await;
             } else if current_level > quiz.level {
-                 let _ = msg.channel_id.say(&ctx.http, "Kamu sudah memiliki role tier lebih tinggi. Tidak bisa downgrade.\nChannel akan dihapus dalam 30 detik.").await;
+                let _ = msg.channel_id.say(&ctx.http, "Kamu sudah memiliki role tier lebih tinggi. Tidak bisa downgrade.\nChannel akan dihapus dalam 30 detik.").await;
             } else {
                 // Remove old role (if any)
                 if current_level >= 0 {
                     // find old role id
                     for q in QUIZZES.values() {
-                         if q.level == current_level {
-                             let _ = member.remove_role(&ctx.http, q.role_id).await;
-                         }
+                        if q.level == current_level {
+                            let _ = member.remove_role(&ctx.http, q.role_id).await;
+                        }
                     }
                 }
-                
+
                 // Add new role
                 if let Err(e) = member.add_role(&ctx.http, quiz.role_id).await {
                     error!("Failed to add role: {:?}", e);
-                    let _ = msg.channel_id.say(&ctx.http, "Gagal menambahkan role. Hubungi admin.").await;
+                    let _ = msg
+                        .channel_id
+                        .say(&ctx.http, "Gagal menambahkan role. Hubungi admin.")
+                        .await;
                 } else {
                     let _ = msg.channel_id.say(&ctx.http, format!(
-                        "**SELAMAT** <@{}>! Kamu sekarang menjadi **{}**.\nChannel ini akan dihapus dalam 30 detik.", 
-                        user_id, quiz.label
+                        "**SELAMAT**! Kamu sekarang mendapatkan role **{}**.\nChannel ini akan dihapus dalam 30 detik.", 
+                        quiz.label
                     )).await;
                 }
             }
 
             // Cleanup
-             let http = ctx.http.clone();
-             let channel_id = msg.channel_id;
-             let u_id = user_id;
-             let sessions = data.role_rank_sessions.clone();
+            let http = ctx.http.clone();
+            let channel_id = msg.channel_id;
+            let u_id = user_id;
+            let sessions = data.role_rank_sessions.clone();
 
-             tokio::spawn(async move {
-                 tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-                 let _ = channel_id.delete(&http).await;
-                 sessions.remove(&u_id);
-             });
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                let _ = channel_id.delete(&http).await;
+                sessions.remove(&u_id);
+            });
         }
     }
-    
+
     Ok(())
 }
 
@@ -510,4 +770,13 @@ fn get_current_quiz_level(member: &serenity::Member) -> i32 {
         }
     }
     -1
+}
+
+fn validate_command(user_input: &str, expected: &str) -> bool {
+    let u = user_input.trim();
+    let e = expected.trim();
+
+    // Simple equality check for now (Strict Mode)
+    // We can make this smarter later if needed (e.g. order of params)
+    u == e
 }

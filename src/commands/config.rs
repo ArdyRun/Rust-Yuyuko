@@ -22,7 +22,7 @@ pub enum ConfigKey {
 #[poise::command(
     slash_command,
     prefix_command,
-    required_permissions = "MANAGE_GUILD",
+    // required_permissions = "MANAGE_GUILD", // Removed for manual check
     subcommands("set", "get")
 )]
 pub async fn config(_ctx: Context<'_>) -> Result<(), Error> {
@@ -39,10 +39,19 @@ pub async fn set(
     let guild_id = match ctx.guild_id() {
         Some(id) => id.to_string(),
         None => {
-            ctx.say("This command can only be used in a server.").await?;
+            ctx.say("This command can only be used in a server.")
+                .await?;
             return Ok(());
         }
     };
+
+    if !check_access(ctx).await? {
+        ctx.say(
+            "You do not have permission to use this command (Requires MANAGE_GUILD or Bot Owner).",
+        )
+        .await?;
+        return Ok(());
+    }
 
     ctx.defer().await?;
 
@@ -75,12 +84,19 @@ pub async fn set(
 
     // Save back to Firebase
     let json_val = serde_json::to_value(&config)?;
-    match data.firebase.set_document("guilds", &guild_id, &json_val).await {
+    match data
+        .firebase
+        .set_document("guilds", &guild_id, &json_val)
+        .await
+    {
         Ok(_) => {
-            info!("Updated config for guild {}: {:?} -> {}", guild_id, key, channel_id);
+            info!(
+                "Updated config for guild {}: {:?} -> {}",
+                guild_id, key, channel_id
+            );
             // Update cache
             data.guild_configs.insert(guild_id.clone(), config);
-            
+
             let embed = serenity::CreateEmbed::new()
                 .title("Configuration Updated")
                 .description(format!("**{:?}** set to <#{}>", key, channel_id))
@@ -102,10 +118,19 @@ pub async fn get(ctx: Context<'_>) -> Result<(), Error> {
     let guild_id = match ctx.guild_id() {
         Some(id) => id.to_string(),
         None => {
-            ctx.say("This command can only be used in a server.").await?;
+            ctx.say("This command can only be used in a server.")
+                .await?;
             return Ok(());
         }
     };
+
+    if !check_access(ctx).await? {
+        ctx.say(
+            "You do not have permission to use this command (Requires MANAGE_GUILD or Bot Owner).",
+        )
+        .await?;
+        return Ok(());
+    }
 
     ctx.defer().await?;
     let data = ctx.data();
@@ -120,7 +145,7 @@ pub async fn get(ctx: Context<'_>) -> Result<(), Error> {
                 // Populate cache
                 data.guild_configs.insert(guild_id.clone(), cfg.clone());
                 cfg
-            },
+            }
             Ok(None) => GuildConfig::default(),
             Err(e) => {
                 error!("Failed to fetch guild config: {:?}", e);
@@ -130,10 +155,22 @@ pub async fn get(ctx: Context<'_>) -> Result<(), Error> {
         }
     };
 
-    let ayumi = config.ayumi_channel_id.map(|id| format!("<#{}>", id)).unwrap_or_else(|| "Not set".to_string());
-    let quiz = config.quiz_channel_id.map(|id| format!("<#{}>", id)).unwrap_or_else(|| "Not set".to_string());
-    let quiz_cat = config.quiz_category_id.map(|id| format!("<#{}>", id)).unwrap_or_else(|| "Not set".to_string());
-    let immersion = config.immersion_channel_id.map(|id| format!("<#{}>", id)).unwrap_or_else(|| "Not set".to_string());
+    let ayumi = config
+        .ayumi_channel_id
+        .map(|id| format!("<#{}>", id))
+        .unwrap_or_else(|| "Not set".to_string());
+    let quiz = config
+        .quiz_channel_id
+        .map(|id| format!("<#{}>", id))
+        .unwrap_or_else(|| "Not set".to_string());
+    let quiz_cat = config
+        .quiz_category_id
+        .map(|id| format!("<#{}>", id))
+        .unwrap_or_else(|| "Not set".to_string());
+    let immersion = config
+        .immersion_channel_id
+        .map(|id| format!("<#{}>", id))
+        .unwrap_or_else(|| "Not set".to_string());
 
     let embed = serenity::CreateEmbed::new()
         .title("Server Configuration")
@@ -146,4 +183,38 @@ pub async fn get(ctx: Context<'_>) -> Result<(), Error> {
     ctx.send(poise::CreateReply::default().embed(embed)).await?;
 
     Ok(())
+}
+
+/// Check if user has access (Owner OR Manage Guild)
+async fn check_access(ctx: Context<'_>) -> Result<bool, Error> {
+    // 1. Check Owner
+    if ctx.framework().options().owners.contains(&ctx.author().id) {
+        return Ok(true);
+    }
+
+    // 2. Check Guild Owner
+    if let Some(guild) = ctx.partial_guild().await {
+        if guild.owner_id == ctx.author().id {
+            return Ok(true);
+        }
+    }
+
+    // 3. Check Permissions
+    // Use user_permissions_in as recommended by deprecation warning (requires strict objects)
+    // Fetch async data first to avoid holding GuildRef across await points
+    if let Some(member) = ctx.author_member().await {
+        if let Ok(channel) = ctx.channel_id().to_channel(ctx).await {
+            if let Some(guild_channel) = channel.guild() {
+                // Access cache synchronously afterwards
+                if let Some(guild) = ctx.guild() {
+                    let perms = guild.user_permissions_in(&guild_channel, &member);
+                    if perms.contains(serenity::Permissions::MANAGE_GUILD) {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(false)
 }
