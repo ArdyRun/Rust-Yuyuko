@@ -1,7 +1,7 @@
 // Streak calculation system
 // Ported from utils/streak.js
 
-use chrono::{NaiveDate, Duration};
+use chrono::{Duration, NaiveDate};
 use std::collections::HashSet;
 
 use super::config::get_effective_date;
@@ -33,7 +33,7 @@ pub fn calculate_streak(dates: &[String]) -> StreakResult {
     }
 
     let date_set: HashSet<NaiveDate> = parsed_dates.iter().cloned().collect();
-    
+
     // Get today and yesterday with day offset
     let today = get_effective_date();
     let yesterday = today - Duration::days(1);
@@ -97,7 +97,7 @@ fn calculate_longest_streak(dates: &[NaiveDate]) -> i32 {
     for i in 1..sorted_dates.len() {
         let prev = sorted_dates[i - 1];
         let curr = sorted_dates[i];
-        
+
         if curr == prev + Duration::days(1) {
             current += 1;
             if current > longest {
@@ -111,7 +111,6 @@ fn calculate_longest_streak(dates: &[NaiveDate]) -> i32 {
     longest
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,7 +121,9 @@ mod tests {
     }
 
     fn yesterday_str() -> String {
-        (get_effective_date() - Duration::days(1)).format("%Y-%m-%d").to_string()
+        (get_effective_date() - Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string()
     }
 
     #[test]
@@ -154,7 +155,7 @@ mod tests {
         let dates: Vec<String> = (0..5)
             .map(|i| (today - Duration::days(i)).format("%Y-%m-%d").to_string())
             .collect();
-        
+
         let result = calculate_streak(&dates);
         assert_eq!(result.current, 5);
         assert_eq!(result.longest, 5);
@@ -171,7 +172,7 @@ mod tests {
             (today - Duration::days(6)).format("%Y-%m-%d").to_string(),
             (today - Duration::days(7)).format("%Y-%m-%d").to_string(),
         ];
-        
+
         let result = calculate_streak(&dates);
         assert_eq!(result.current, 2);
         assert_eq!(result.longest, 3);

@@ -1,8 +1,8 @@
 // Help command - show usage guide
 
-use poise::serenity_prelude as serenity;
-use crate::{Context, Error};
 use crate::utils::config::colors;
+use crate::{Context, Error};
+use poise::serenity_prelude as serenity;
 
 /// Show help and usage guide
 #[poise::command(slash_command, prefix_command)]

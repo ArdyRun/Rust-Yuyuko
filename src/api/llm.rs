@@ -1,6 +1,6 @@
+use crate::Data;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use crate::Data;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -46,8 +46,8 @@ pub async fn completion_openrouter(
 ) -> anyhow::Result<String> {
     let api_key = std::env::var("OPENROUTER_API_KEY")?;
     // Updated to use openai/gpt-oss-120b:free (xiaomi model is no longer free)
-    let model = "openai/gpt-oss-120b:free"; 
-    
+    let model = "openai/gpt-oss-120b:free";
+
     let mut all_messages = vec![ChatMessage {
         role: "system".to_string(),
         content: system_prompt.to_string(),
@@ -57,12 +57,13 @@ pub async fn completion_openrouter(
     let body = json!({
         "model": model,
         "messages": all_messages,
-        "max_tokens": 2048, 
+        "max_tokens": 2048,
         "temperature": 0.5, // Adjusted to match typical chatbot settings
     });
 
     // Note: OpenRouter API URL
-    let res = data.http_client
+    let res = data
+        .http_client
         .post("https://openrouter.ai/api/v1/chat/completions")
         .header("Authorization", format!("Bearer {}", api_key))
         .header("HTTP-Referer", "https://discord.com") // Required by OpenRouter
@@ -70,24 +71,23 @@ pub async fn completion_openrouter(
         .json(&body)
         .send()
         .await?;
-        
+
     if !res.status().is_success() {
         let error_text = res.text().await?;
         anyhow::bail!("OpenRouter API error: {}", error_text);
     }
 
     let response: OpenRouterResponse = res.json().await?;
-    
-    response.choices.first()
+
+    response
+        .choices
+        .first()
         .map(|c| c.message.content.clone())
         .ok_or_else(|| anyhow::anyhow!("No choices in OpenRouter response"))
 }
 
 /// Send a request to Gemini for multimodal tasks (Translate, etc.) (Placeholder for now)
-pub async fn completion_gemini(
-    data: &Data,
-    prompt: &str,
-) -> anyhow::Result<String> {
+pub async fn completion_gemini(data: &Data, prompt: &str) -> anyhow::Result<String> {
     let api_key = std::env::var("GEMINI_API_KEY")?;
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={}",
@@ -102,20 +102,18 @@ pub async fn completion_gemini(
         }]
     });
 
-    let res = data.http_client
-        .post(&url)
-        .json(&body)
-        .send()
-        .await?;
+    let res = data.http_client.post(&url).json(&body).send().await?;
 
     if !res.status().is_success() {
         let error_text = res.text().await?;
         anyhow::bail!("Gemini API error: {}", error_text);
     }
-    
+
     let response: GeminiResponse = res.json().await?;
-    
-    response.candidates.as_ref()
+
+    response
+        .candidates
+        .as_ref()
         .and_then(|c| c.first())
         .and_then(|c| c.content.parts.first())
         .and_then(|p| p.text.clone())
@@ -135,7 +133,7 @@ pub async fn completion_gemini_vision(
         api_key
     );
 
-    use base64::{Engine as _, engine::general_purpose};
+    use base64::{engine::general_purpose, Engine as _};
     let base64_image = general_purpose::STANDARD.encode(image_data);
 
     let body = json!({
@@ -152,20 +150,18 @@ pub async fn completion_gemini_vision(
         }]
     });
 
-    let res = data.http_client
-        .post(&url)
-        .json(&body)
-        .send()
-        .await?;
+    let res = data.http_client.post(&url).json(&body).send().await?;
 
     if !res.status().is_success() {
         let error_text = res.text().await?;
         anyhow::bail!("Gemini Vision API error: {}", error_text);
     }
-    
+
     let response: GeminiResponse = res.json().await?;
-    
-    response.candidates.as_ref()
+
+    response
+        .candidates
+        .as_ref()
         .and_then(|c| c.first())
         .and_then(|c| c.content.parts.first())
         .and_then(|p| p.text.clone())
@@ -211,12 +207,9 @@ pub struct ImageGenerationResult {
 }
 
 /// Generate an image using Gemini's image generation model
-pub async fn generate_image(
-    data: &Data,
-    prompt: &str,
-) -> anyhow::Result<ImageGenerationResult> {
+pub async fn generate_image(data: &Data, prompt: &str) -> anyhow::Result<ImageGenerationResult> {
     let api_key = std::env::var("GEMINI_API_KEY")?;
-    
+
     // Using gemini-2.0-flash-preview-image-generation model
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-preview-image-generation:generateContent?key={}",
@@ -235,7 +228,7 @@ pub async fn generate_image(
         .replace("bikin gambar", "")
         .trim()
         .to_string();
-    
+
     let full_prompt = format!(
         "Create a high-quality, detailed anime style image of: {}. Make it visually appealing, artistic, and well-composed.",
         clean_prompt
@@ -253,30 +246,28 @@ pub async fn generate_image(
         }
     });
 
-    let res = data.http_client
-        .post(&url)
-        .json(&body)
-        .send()
-        .await?;
+    let res = data.http_client.post(&url).json(&body).send().await?;
 
     if !res.status().is_success() {
         let error_text = res.text().await?;
         anyhow::bail!("Gemini Image Generation API error: {}", error_text);
     }
-    
+
     let response: ImageGenResponse = res.json().await?;
-    
+
     // Find image part in response
-    let candidates = response.candidates
+    let candidates = response
+        .candidates
         .ok_or_else(|| anyhow::anyhow!("No candidates in image generation response"))?;
-    
-    let candidate = candidates.first()
+
+    let candidate = candidates
+        .first()
         .ok_or_else(|| anyhow::anyhow!("Empty candidates array"))?;
-    
+
     // Look for image data in parts
     let mut image_data: Option<ImageInlineData> = None;
     let mut text_response: Option<String> = None;
-    
+
     for part in &candidate.content.parts {
         if let Some(ref inline) = part.inline_data {
             if inline.mime_type.starts_with("image/") {
@@ -287,13 +278,12 @@ pub async fn generate_image(
             text_response = Some(text.clone());
         }
     }
-    
-    let inline = image_data
-        .ok_or_else(|| anyhow::anyhow!("No image data in response"))?;
-    
-    use base64::{Engine as _, engine::general_purpose};
+
+    let inline = image_data.ok_or_else(|| anyhow::anyhow!("No image data in response"))?;
+
+    use base64::{engine::general_purpose, Engine as _};
     let decoded = general_purpose::STANDARD.decode(&inline.data)?;
-    
+
     Ok(ImageGenerationResult {
         image_data: decoded,
         mime_type: inline.mime_type,

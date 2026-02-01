@@ -1,19 +1,19 @@
 // Yuyuko Bot - Rust Edition
 // A lightweight Discord bot for Japanese immersion tracking
 
-mod commands;
 mod api;
+mod commands;
+mod features;
 mod models;
 mod utils;
-mod features;
 
 use std::env;
 use std::sync::Arc;
 
-use poise::serenity_prelude as serenity;
-use tracing::{info, error};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use dashmap::DashMap;
+use poise::serenity_prelude as serenity;
+use tracing::{error, info};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::models::guild::GuildConfig;
 
@@ -75,8 +75,8 @@ async fn main() {
     dotenvy::dotenv().ok();
 
     let token = env::var("DISCORD_TOKEN").expect("DISCORD_TOKEN must be set");
-    let _firebase_project_id = env::var("FIREBASE_PROJECT_ID")
-        .unwrap_or_else(|_| "yuyuko-bot".to_string());
+    let _firebase_project_id =
+        env::var("FIREBASE_PROJECT_ID").unwrap_or_else(|_| "yuyuko-bot".to_string());
     let owner_id = env::var("BOT_OWNER_ID").ok();
 
     info!("Starting Yuyuko Bot (Rust Edition)...");
@@ -121,23 +121,48 @@ async fn main() {
                             error!("Command error: {:?}", error);
                             let _ = ctx.say(format!("Error: {}", error)).await;
                         }
-                        poise::FrameworkError::MissingUserPermissions { missing_permissions, ctx, .. } => {
+                        poise::FrameworkError::MissingUserPermissions {
+                            missing_permissions,
+                            ctx,
+                            ..
+                        } => {
                             let msg = if let Some(perms) = missing_permissions {
-                                format!("You need the **{:?}** permission to use this command.", perms)
+                                format!(
+                                    "You need the **{:?}** permission to use this command.",
+                                    perms
+                                )
                             } else {
-                                "You do not have the required permissions to use this command.".to_string()
+                                "You do not have the required permissions to use this command."
+                                    .to_string()
                             };
-                            let _ = ctx.send(poise::CreateReply::default().content(msg).ephemeral(true)).await;
+                            let _ = ctx
+                                .send(poise::CreateReply::default().content(msg).ephemeral(true))
+                                .await;
                         }
-                        poise::FrameworkError::MissingBotPermissions { missing_permissions, ctx, .. } => {
-                             let msg = format!("I need the **{:?}** permission to execute this command.", missing_permissions);
-                             let _ = ctx.send(poise::CreateReply::default().content(msg).ephemeral(true)).await;
+                        poise::FrameworkError::MissingBotPermissions {
+                            missing_permissions,
+                            ctx,
+                            ..
+                        } => {
+                            let msg = format!(
+                                "I need the **{:?}** permission to execute this command.",
+                                missing_permissions
+                            );
+                            let _ = ctx
+                                .send(poise::CreateReply::default().content(msg).ephemeral(true))
+                                .await;
                         }
                         err => {
                             error!("Framework error: {:?}", err);
                             // Try to notify the user if possible about the unexpected error
                             if let Some(ctx) = err.ctx() {
-                                let _ = ctx.send(poise::CreateReply::default().content("An unexpected error occurred.").ephemeral(true)).await;
+                                let _ = ctx
+                                    .send(
+                                        poise::CreateReply::default()
+                                            .content("An unexpected error occurred.")
+                                            .ephemeral(true),
+                                    )
+                                    .await;
                             }
                         }
                     }
@@ -147,25 +172,32 @@ async fn main() {
                 Box::pin(async move {
                     if let serenity::FullEvent::Message { new_message } = event {
                         // Handle AFK status
-                        if let Err(e) = features::afk_handler::handle_afk_message(ctx, new_message).await {
+                        if let Err(e) =
+                            features::afk_handler::handle_afk_message(ctx, new_message).await
+                        {
                             error!("Error in AFK handler: {:?}", e);
                         }
-                        
+
                         // Handle Role Rank Messages (Kotoba Bot listener)
-                        if let Err(e) = features::role_rank::handle_message(ctx, new_message, data).await {
-                             error!("Error in Role Rank message handler: {:?}", e);
+                        if let Err(e) =
+                            features::role_rank::handle_message(ctx, new_message, data).await
+                        {
+                            error!("Error in Role Rank message handler: {:?}", e);
                         }
 
                         // Handle Ayumi AI
-                        if let Err(e) = features::ayumi::handle_message(ctx, new_message, data).await {
+                        if let Err(e) =
+                            features::ayumi::handle_message(ctx, new_message, data).await
+                        {
                             error!("Error in Ayumi handler: {:?}", e);
                         }
-                    }
-                    else if let serenity::FullEvent::InteractionCreate { interaction } = event {
+                    } else if let serenity::FullEvent::InteractionCreate { interaction } = event {
                         if let serenity::Interaction::Component(component) = interaction {
-                             if let Err(e) = features::role_rank::handle_interaction(ctx, component, data).await {
-                                  error!("Error in Role Rank interaction handler: {:?}", e);
-                             }
+                            if let Err(e) =
+                                features::role_rank::handle_interaction(ctx, component, data).await
+                            {
+                                error!("Error in Role Rank interaction handler: {:?}", e);
+                            }
                         }
                     }
                     Ok(())
@@ -181,11 +213,17 @@ async fn main() {
                 for guild in &_ready.guilds {
                     let guild_id = guild.id;
                     info!("Registering commands in guild: {}", guild_id);
-                    if let Err(e) = poise::builtins::register_in_guild(ctx, &framework.options().commands, guild_id).await {
+                    if let Err(e) = poise::builtins::register_in_guild(
+                        ctx,
+                        &framework.options().commands,
+                        guild_id,
+                    )
+                    .await
+                    {
                         error!("Failed to register commands in guild {}: {:?}", guild_id, e);
                     }
                 }
-                
+
                 // Also register globally as a fallback
                 // poise::builtins::register_globally(ctx, &framework.options().commands).await?;
 
@@ -211,28 +249,33 @@ async fn main() {
 
     // Run with graceful shutdown
     let shard_manager = client.shard_manager.clone();
-    
+
     // Background Task: Quiz Selector Refresh
     let http = client.http.clone();
     let configs = guild_configs.clone(); // This clone works if guild_configs is available.
-    // BUT guild_configs was moved into setup() at line 174 (original view).
-    // Wait, in line 94: let guild_configs = Arc::new(DashMap::new());
-    // In setup(): ... guild_configs: guild_configs.clone() ... this moves the Arc clone? No, the variable itself if captured.
-    
+                                         // BUT guild_configs was moved into setup() at line 174 (original view).
+                                         // Wait, in line 94: let guild_configs = Arc::new(DashMap::new());
+                                         // In setup(): ... guild_configs: guild_configs.clone() ... this moves the Arc clone? No, the variable itself if captured.
+
     // Add imports at top of file needed for this: use futures::StreamExt;
-    
+
     tokio::spawn(async move {
         use futures::StreamExt;
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(300)); // Check every 5 minutes
-        
+
         loop {
             interval.tick().await;
-            
+
             // Snapshot the configs to avoid holding locks during async operations
             // We collect (GuildID, ChannelID) to be able to cleanup invalid configs
-            let channels_to_check: Vec<(String, String)> = configs.iter()
+            let channels_to_check: Vec<(String, String)> = configs
+                .iter()
                 .filter_map(|entry| {
-                     entry.value().quiz_channel_id.clone().map(|cid| (entry.key().clone(), cid))
+                    entry
+                        .value()
+                        .quiz_channel_id
+                        .clone()
+                        .map(|cid| (entry.key().clone(), cid))
                 })
                 .collect();
 

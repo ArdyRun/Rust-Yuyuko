@@ -1,6 +1,5 @@
 // Centralized configuration for Yuyuko Bot
 
-
 /// Day offset - day ends at 2:00 AM instead of midnight
 /// Activity at 1:30 AM on Jan 16 will count as Jan 15
 pub const DAY_END_HOUR: u32 = 2;
@@ -53,13 +52,13 @@ pub mod colors {
 /// If current time is before DAY_END_HOUR (e.g., 2 AM), return yesterday's date
 #[allow(dead_code)]
 pub fn get_effective_date() -> chrono::NaiveDate {
-    use chrono::{Utc, Timelike, Duration};
-    
+    use chrono::{Duration, Timelike, Utc};
+
     // JST is UTC+9
     let now_utc = Utc::now();
     let now_jst = now_utc + Duration::hours(9);
     let hours = now_jst.hour();
-    
+
     if hours < DAY_END_HOUR {
         now_jst.date_naive() - Duration::days(1)
     } else {
@@ -73,18 +72,16 @@ pub fn get_effective_date_string() -> String {
     get_effective_date().format("%Y-%m-%d").to_string()
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_media_labels() {
         assert_eq!(get_media_label("anime"), "Anime");
         assert_eq!(get_media_label("visual_novel"), "Visual Novel");
     }
-    
+
     #[test]
     fn test_units() {
         assert_eq!(get_unit("anime"), "episodes");

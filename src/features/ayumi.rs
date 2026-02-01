@@ -1,19 +1,21 @@
-use poise::serenity_prelude as serenity;
-use tracing::{error, debug};
-use std::sync::Arc;
-use std::collections::HashMap;
-use tokio::sync::Mutex;
-use lru::LruCache;
-use std::num::NonZeroUsize;
-use once_cell::sync::Lazy;
 use chrono::{DateTime, Utc};
+use lru::LruCache;
+use once_cell::sync::Lazy;
+use poise::serenity_prelude as serenity;
+use std::collections::HashMap;
+use std::num::NonZeroUsize;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tracing::{debug, error};
 
-use crate::features::novel_recommender::smart_novel_search;
+use crate::api::llm::{
+    completion_gemini_vision, completion_openrouter, generate_image, ChatMessage,
+};
 use crate::features::custom_prompt::get_user_custom_prompt;
-use crate::Data;
+use crate::features::novel_recommender::smart_novel_search;
 use crate::models::guild::GuildConfig;
-use crate::api::llm::{completion_openrouter, completion_gemini_vision, generate_image, ChatMessage};
 use crate::utils::ayumi_prompt::AYUMI_SYSTEM_PROMPT;
+use crate::Data;
 
 // ============ User Context ============
 
@@ -54,22 +56,33 @@ impl UserData {
 type HistoryCache = LruCache<u64, Vec<ChatMessage>>;
 type UserCache = HashMap<u64, UserData>;
 
-static CONVERSATION_HISTORY: Lazy<Arc<Mutex<HistoryCache>>> = Lazy::new(|| {
-    Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(100).unwrap())))
-});
+static CONVERSATION_HISTORY: Lazy<Arc<Mutex<HistoryCache>>> =
+    Lazy::new(|| Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(100).unwrap()))));
 
-static USER_DATA: Lazy<Arc<Mutex<UserCache>>> = Lazy::new(|| {
-    Arc::new(Mutex::new(HashMap::new()))
-});
+static USER_DATA: Lazy<Arc<Mutex<UserCache>>> = Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 // ============ Detection Functions ============
 
 fn detect_image_generation(text: &str) -> bool {
     let keywords = [
-        "buatkan gambar", "generate gambar", "buat gambar", "gambarkan",
-        "draw", "create image", "bikin gambar", "lukis", "sketch",
-        "ilustrasi", "visualisasi", "make an image", "buatkan ilustrasi",
-        "create illustration", "gambar anime", "anime art", "pixel art", "artwork"
+        "buatkan gambar",
+        "generate gambar",
+        "buat gambar",
+        "gambarkan",
+        "draw",
+        "create image",
+        "bikin gambar",
+        "lukis",
+        "sketch",
+        "ilustrasi",
+        "visualisasi",
+        "make an image",
+        "buatkan ilustrasi",
+        "create illustration",
+        "gambar anime",
+        "anime art",
+        "pixel art",
+        "artwork",
     ];
     let lower = text.to_lowercase();
     keywords.iter().any(|k| lower.contains(k))
@@ -77,9 +90,20 @@ fn detect_image_generation(text: &str) -> bool {
 
 fn detect_avatar_question(text: &str) -> bool {
     let keywords = [
-        "foto profil", "avatar", "profile picture", "pp", "foto pp",
-        "gambar profil", "foto saya", "avatar saya", "pp saya",
-        "lihat foto", "foto gue", "avatar gue", "pp gue", "pfp"
+        "foto profil",
+        "avatar",
+        "profile picture",
+        "pp",
+        "foto pp",
+        "gambar profil",
+        "foto saya",
+        "avatar saya",
+        "pp saya",
+        "lihat foto",
+        "foto gue",
+        "avatar gue",
+        "pp gue",
+        "pfp",
     ];
     let lower = text.to_lowercase();
     keywords.iter().any(|k| lower.contains(k))
@@ -87,10 +111,23 @@ fn detect_avatar_question(text: &str) -> bool {
 
 fn detect_novel_request(text: &str) -> bool {
     let keywords = [
-        "novel", "light novel", "cari novel", "rekomendasi novel",
-        "download novel", "unduh novel", "novel saran", "novel untuk",
-        "novel pemula", "novel jlpt", "novel n5", "novel n4", "novel n3",
-        "novel n2", "novel n1", "novel romance", "novel isekai"
+        "novel",
+        "light novel",
+        "cari novel",
+        "rekomendasi novel",
+        "download novel",
+        "unduh novel",
+        "novel saran",
+        "novel untuk",
+        "novel pemula",
+        "novel jlpt",
+        "novel n5",
+        "novel n4",
+        "novel n3",
+        "novel n2",
+        "novel n1",
+        "novel romance",
+        "novel isekai",
     ];
     let lower = text.to_lowercase();
     keywords.iter().any(|k| lower.contains(k))
@@ -106,7 +143,7 @@ fn smart_chunk_message(text: &str, max_len: usize) -> Vec<String> {
 
     let mut chunks = Vec::new();
     let mut current_chunk = String::new();
-    
+
     for line in text.lines() {
         // If single line is too long, split it
         if line.len() > max_len {
@@ -115,7 +152,7 @@ fn smart_chunk_message(text: &str, max_len: usize) -> Vec<String> {
                 chunks.push(current_chunk);
                 current_chunk = String::new();
             }
-            
+
             // Split long line by words
             let mut word_chunk = String::new();
             for word in line.split_whitespace() {
@@ -148,12 +185,12 @@ fn smart_chunk_message(text: &str, max_len: usize) -> Vec<String> {
             current_chunk.push_str(line);
         }
     }
-    
+
     // Don't forget last chunk
     if !current_chunk.is_empty() {
         chunks.push(current_chunk);
     }
-    
+
     chunks
 }
 
@@ -182,7 +219,7 @@ pub async fn handle_message(
                 let cfg = serde_json::from_value::<GuildConfig>(doc).unwrap_or_default();
                 data.guild_configs.insert(guild_id.clone(), cfg.clone());
                 cfg
-            },
+            }
             Ok(None) => return Ok(()),
             Err(e) => {
                 error!("Failed to fetch guild config for {}: {:?}", guild_id, e);
@@ -205,13 +242,17 @@ pub async fn handle_message(
     // Get or create user data
     let user_id = msg.author.id.get();
     let nickname = msg.member.as_ref().and_then(|m| m.nick.as_deref());
-    let display_name = msg.author.global_name.as_deref().unwrap_or(&msg.author.name);
-    
+    let display_name = msg
+        .author
+        .global_name
+        .as_deref()
+        .unwrap_or(&msg.author.name);
+
     let (user_name, interaction_count) = {
         let mut users = USER_DATA.lock().await;
-        let user_data = users.entry(user_id).or_insert_with(|| {
-            UserData::new(user_id, &msg.author.name, display_name, nickname)
-        });
+        let user_data = users
+            .entry(user_id)
+            .or_insert_with(|| UserData::new(user_id, &msg.author.name, display_name, nickname));
         user_data.interaction_count += 1;
         user_data.last_interaction = Utc::now();
         if nickname.is_some() {
@@ -235,14 +276,16 @@ pub async fn handle_message(
 
     // Check for image attachment
     let attachment = msg.attachments.iter().find(|a| {
-        a.content_type.as_ref().map_or(false, |ct| ct.starts_with("image/"))
+        a.content_type
+            .as_ref()
+            .map_or(false, |ct| ct.starts_with("image/"))
     });
 
     let response: String;
 
     if let Some(att) = attachment {
         debug!("Processing image attachment for user {}", user_name);
-        
+
         let image_data = match att.download().await {
             Ok(d) => d,
             Err(e) => {
@@ -259,7 +302,7 @@ pub async fn handle_message(
         };
 
         let mime_type = att.content_type.as_deref().unwrap_or("image/jpeg");
-        
+
         response = match completion_gemini_vision(data, prompt, &image_data, mime_type).await {
             Ok(res) => res,
             Err(e) => {
@@ -269,97 +312,135 @@ pub async fn handle_message(
         };
     } else if detect_image_generation(&msg.content) {
         debug!("Processing image generation for user {}", user_name);
-        
-        let generating_msg = msg.reply(ctx, format!("{}, Ayumi lagi bikin gambar sesuai request kamu nih! Tunggu sebentar ya...", user_name)).await?;
-        
+
+        let generating_msg = msg
+            .reply(
+                ctx,
+                format!(
+                    "{}, Ayumi lagi bikin gambar sesuai request kamu nih! Tunggu sebentar ya...",
+                    user_name
+                ),
+            )
+            .await?;
+
         match generate_image(data, &msg.content).await {
             Ok(result) => {
                 let _ = generating_msg.delete(ctx).await;
-                let extension = if result.mime_type.contains("png") { "png" } else { "jpg" };
-                let filename = format!("ayumi_generated_{}.{}", chrono::Utc::now().timestamp(), extension);
-                
+                let extension = if result.mime_type.contains("png") {
+                    "png"
+                } else {
+                    "jpg"
+                };
+                let filename = format!(
+                    "ayumi_generated_{}.{}",
+                    chrono::Utc::now().timestamp(),
+                    extension
+                );
+
                 let attachment = serenity::CreateAttachment::bytes(result.image_data, filename);
-                let reply_content = format!("{}, nih gambar yang Ayumi buatin! Gimana, sesuai ekspektasi gak?", user_name);
-                
-                msg.channel_id.send_message(ctx, serenity::CreateMessage::new()
-                    .content(&reply_content)
-                    .add_file(attachment)
-                ).await?;
-                
+                let reply_content = format!(
+                    "{}, nih gambar yang Ayumi buatin! Gimana, sesuai ekspektasi gak?",
+                    user_name
+                );
+
+                msg.channel_id
+                    .send_message(
+                        ctx,
+                        serenity::CreateMessage::new()
+                            .content(&reply_content)
+                            .add_file(attachment),
+                    )
+                    .await?;
+
                 response = reply_content;
             }
             Err(e) => {
                 error!("Image generation failed: {:?}", e);
                 let _ = generating_msg.delete(ctx).await;
-                response = format!("{}, maaf nih Ayumi lagi gabisa bikin gambar. Coba lagi nanti ya", user_name);
+                response = format!(
+                    "{}, maaf nih Ayumi lagi gabisa bikin gambar. Coba lagi nanti ya",
+                    user_name
+                );
                 msg.reply(ctx, &response).await?;
             }
         };
-        
+
         // Update history and return
         {
             let mut cache = CONVERSATION_HISTORY.lock().await;
-            messages.push(ChatMessage { role: "assistant".to_string(), content: response.clone() });
+            messages.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: response.clone(),
+            });
             if messages.len() > 20 {
                 messages = messages.iter().rev().take(20).rev().cloned().collect();
             }
             cache.put(user_id, messages);
         }
         return Ok(());
-        
     } else if detect_avatar_question(&msg.content) {
         debug!("Processing avatar analysis for user {}", user_name);
-        
-        let avatar_url = msg.author.avatar_url().unwrap_or_else(|| msg.author.default_avatar_url());
-        
+
+        let avatar_url = msg
+            .author
+            .avatar_url()
+            .unwrap_or_else(|| msg.author.default_avatar_url());
+
         let avatar_response = match data.http_client.get(&avatar_url).send().await {
             Ok(res) => res,
             Err(e) => {
                 error!("Failed to fetch avatar: {:?}", e);
-                msg.reply(ctx, "Ayumi gak bisa liat foto profil kamu...").await?;
+                msg.reply(ctx, "Ayumi gak bisa liat foto profil kamu...")
+                    .await?;
                 return Ok(());
             }
         };
-        
+
         let avatar_data = match avatar_response.bytes().await {
             Ok(bytes) => bytes.to_vec(),
             Err(e) => {
                 error!("Failed to read avatar bytes: {:?}", e);
-                msg.reply(ctx, "Ayumi gak bisa liat foto profil kamu...").await?;
+                msg.reply(ctx, "Ayumi gak bisa liat foto profil kamu...")
+                    .await?;
                 return Ok(());
             }
         };
-        
+
         let prompt = format!(
             "Kamu adalah Ayumi. User {} (sudah {} kali ngobrol sama kamu) minta lihat foto profil mereka. Pertanyaan: \"{}\". Analisis dan komentar foto profil ini dengan fun tapi sopan.",
             user_name, interaction_count, msg.content
         );
-        
+
         response = match completion_gemini_vision(data, &prompt, &avatar_data, "image/png").await {
             Ok(res) => res,
             Err(e) => {
                 error!("Avatar analysis error: {:?}", e);
-                format!("{}, Ayumi pengen lihat foto profil kamu tapi lagi error nih!", user_name)
+                format!(
+                    "{}, Ayumi pengen lihat foto profil kamu tapi lagi error nih!",
+                    user_name
+                )
             }
         };
-        
     } else if detect_novel_request(&msg.content) {
         debug!("Processing smart novel search for user {}", user_name);
         response = smart_novel_search(data, &msg.content).await;
     } else {
-        debug!("Processing text chat for user {} (interaction #{})", user_name, interaction_count);
-        
+        debug!(
+            "Processing text chat for user {} (interaction #{})",
+            user_name, interaction_count
+        );
+
         // Build context with user info
         let user_context = format!(
             "User ini namanya {}. Sudah {} kali berinteraksi dengan Ayumi.",
             user_name, interaction_count
         );
-        
-        let system_prompt = get_user_custom_prompt(user_id)
-            .unwrap_or_else(|| AYUMI_SYSTEM_PROMPT.to_string());
-        
+
+        let system_prompt =
+            get_user_custom_prompt(user_id).unwrap_or_else(|| AYUMI_SYSTEM_PROMPT.to_string());
+
         let full_prompt = format!("{}\n\n{}", system_prompt, user_context);
-        
+
         response = match completion_openrouter(data, &full_prompt, messages.clone()).await {
             Ok(res) => res,
             Err(e) => {
@@ -382,7 +463,9 @@ pub async fn handle_message(
         } else if i == chunks.len() - 1 {
             msg.channel_id.say(&ctx.http, chunk).await?;
         } else {
-            msg.channel_id.say(&ctx.http, format!("{}\n\n*Lanjut...*", chunk)).await?;
+            msg.channel_id
+                .say(&ctx.http, format!("{}\n\n*Lanjut...*", chunk))
+                .await?;
         }
     }
 
@@ -393,11 +476,11 @@ pub async fn handle_message(
             role: "assistant".to_string(),
             content: response,
         });
-        
+
         if messages.len() > 20 {
             messages = messages.iter().rev().take(20).rev().cloned().collect();
         }
-        
+
         cache.put(user_id, messages);
     }
 

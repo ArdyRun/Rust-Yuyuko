@@ -1,7 +1,7 @@
 // API integrations module
-pub mod firebase;
-pub mod youtube;
 pub mod anilist;
-pub mod vndb;
-pub mod llm;
+pub mod firebase;
 pub mod jimaku;
+pub mod llm;
+pub mod vndb;
+pub mod youtube;

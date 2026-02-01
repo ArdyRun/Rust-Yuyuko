@@ -1,12 +1,12 @@
 // AFK command - set AFK status
 // Ported from commands/afk.js
 
+use once_cell::sync::Lazy;
 use poise::serenity_prelude as serenity;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
-use once_cell::sync::Lazy;
 
 use crate::utils::config::colors;
 use crate::{Context, Error};
@@ -21,9 +21,8 @@ pub struct AfkData {
 }
 
 /// Global AFK users map (User ID -> AFK Data)
-pub static AFK_USERS: Lazy<Arc<RwLock<HashMap<u64, AfkData>>>> = Lazy::new(|| {
-    Arc::new(RwLock::new(HashMap::new()))
-});
+pub static AFK_USERS: Lazy<Arc<RwLock<HashMap<u64, AfkData>>>> =
+    Lazy::new(|| Arc::new(RwLock::new(HashMap::new())));
 
 /// Set your AFK status
 #[poise::command(slash_command, prefix_command)]
@@ -41,24 +40,35 @@ pub async fn afk(
     // Store AFK data
     {
         let mut afk_users = AFK_USERS.write().await;
-        afk_users.insert(user.id.get(), AfkData {
-            username: user.name.clone(),
-            reason: reason.clone(),
-            timestamp,
-            avatar_url: user.avatar_url().unwrap_or_else(|| user.default_avatar_url()),
-        });
+        afk_users.insert(
+            user.id.get(),
+            AfkData {
+                username: user.name.clone(),
+                reason: reason.clone(),
+                timestamp,
+                avatar_url: user
+                    .avatar_url()
+                    .unwrap_or_else(|| user.default_avatar_url()),
+            },
+        );
     }
 
     let embed = serenity::CreateEmbed::new()
         .color(colors::INFO)
-        .author(serenity::CreateEmbedAuthor::new(&user.name)
-            .icon_url(user.avatar_url().unwrap_or_else(|| user.default_avatar_url())))
+        .author(
+            serenity::CreateEmbedAuthor::new(&user.name).icon_url(
+                user.avatar_url()
+                    .unwrap_or_else(|| user.default_avatar_url()),
+            ),
+        )
         .title("AFK")
         .description(format!(
             "User lain akan diberitahu kalau kamu sedang AFK.\n**Alasan:** {}",
             reason
         ))
-        .footer(serenity::CreateEmbedFooter::new("Kirim pesan lagi untuk menghapus status AFK"))
+        .footer(serenity::CreateEmbedFooter::new(
+            "Kirim pesan lagi untuk menghapus status AFK",
+        ))
         .timestamp(serenity::Timestamp::now());
 
     ctx.send(poise::CreateReply::default().embed(embed)).await?;

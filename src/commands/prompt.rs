@@ -2,8 +2,8 @@ use poise::serenity_prelude as serenity;
 use tracing::{error, info};
 
 use crate::features::custom_prompt;
-use crate::{Context, Error};
 use crate::utils::config::colors;
+use crate::{Context, Error};
 
 /// Action to perform on custom prompt
 #[derive(Debug, Clone, Copy, poise::ChoiceParameter)]
@@ -31,7 +31,8 @@ pub async fn prompt(
             let url = match url {
                 Some(u) => u,
                 None => {
-                    ctx.say("Please provide a Rentry URL to set your prompt.").await?;
+                    ctx.say("Please provide a Rentry URL to set your prompt.")
+                        .await?;
                     return Ok(());
                 }
             };
@@ -54,11 +55,17 @@ pub async fn prompt(
             }
 
             // Fetch content
-            let content = match custom_prompt::fetch_prompt_from_rentry(&ctx.data().http_client, &url).await {
+            let content = match custom_prompt::fetch_prompt_from_rentry(
+                &ctx.data().http_client,
+                &url,
+            )
+            .await
+            {
                 Ok(c) => c,
                 Err(e) => {
                     error!("Failed to fetch Rentry prompt: {:?}", e);
-                    ctx.say(format!("Failed to fetch prompt from Rentry: {}", e)).await?;
+                    ctx.say(format!("Failed to fetch prompt from Rentry: {}", e))
+                        .await?;
                     return Ok(());
                 }
             };
@@ -72,17 +79,19 @@ pub async fn prompt(
             // Save prompt
             if custom_prompt::save_user_custom_prompt(user_id, &content) {
                 info!("Updated custom prompt for user {}", user_id);
-                
+
                 let embed = serenity::CreateEmbed::new()
                     .title("Custom Prompt Updated")
                     .description("Your custom Ayumi personality has been successfully updated!")
                     .field("Source", &url, false)
                     .field("Length", format!("{} characters", content.len()), true)
                     .color(colors::SUCCESS);
-                    
-                ctx.send(poise::CreateReply::default().embed(embed).ephemeral(true)).await?;
+
+                ctx.send(poise::CreateReply::default().embed(embed).ephemeral(true))
+                    .await?;
             } else {
-                ctx.say("Failed to save custom prompt. Please try again later.").await?;
+                ctx.say("Failed to save custom prompt. Please try again later.")
+                    .await?;
             }
         }
         PromptAction::View => {
@@ -99,34 +108,38 @@ pub async fn prompt(
                     .field("Full Length", format!("{} characters", prompt.len()), true)
                     .color(colors::INFO);
 
-                ctx.send(poise::CreateReply::default().embed(embed).ephemeral(true)).await?;
+                ctx.send(poise::CreateReply::default().embed(embed).ephemeral(true))
+                    .await?;
             } else {
                 let embed = serenity::CreateEmbed::new()
                     .title("No Custom Prompt")
                     .description("You don't have a custom prompt set. Ayumi is using her default personality.")
                     .color(colors::WARNING);
 
-                ctx.send(poise::CreateReply::default().embed(embed).ephemeral(true)).await?;
+                ctx.send(poise::CreateReply::default().embed(embed).ephemeral(true))
+                    .await?;
             }
         }
         PromptAction::Delete => {
             // Check if exists first
             if custom_prompt::get_user_custom_prompt(user_id).is_none() {
-                 ctx.say("You don't have a custom prompt set.").await?;
-                 return Ok(());
+                ctx.say("You don't have a custom prompt set.").await?;
+                return Ok(());
             }
 
             if custom_prompt::delete_user_custom_prompt(user_id) {
                 info!("Deleted custom prompt for user {}", user_id);
-                
+
                 let embed = serenity::CreateEmbed::new()
                     .title("Custom Prompt Deleted")
                     .description("Your custom prompt has been removed. Ayumi has reverted to her default personality.")
                     .color(colors::SUCCESS);
 
-                ctx.send(poise::CreateReply::default().embed(embed).ephemeral(true)).await?;
+                ctx.send(poise::CreateReply::default().embed(embed).ephemeral(true))
+                    .await?;
             } else {
-                ctx.say("Failed to delete custom prompt. Please try again later.").await?;
+                ctx.say("Failed to delete custom prompt. Please try again later.")
+                    .await?;
             }
         }
     }

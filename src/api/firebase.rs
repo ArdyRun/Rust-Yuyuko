@@ -48,7 +48,7 @@ impl FirebaseClient {
     pub fn from_file(client: Client, path: &str) -> Result<Self> {
         let content = std::fs::read_to_string(path)?;
         let service_account: ServiceAccount = serde_json::from_str(&content)?;
-        
+
         Ok(Self {
             client,
             service_account,
@@ -75,7 +75,7 @@ impl FirebaseClient {
 
         // Generate new token
         let token = self.generate_access_token().await?;
-        
+
         // Cache it
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -150,12 +150,7 @@ impl FirebaseClient {
         let token = self.get_access_token().await?;
         let url = format!("{}/{}/{}", self.base_url(), collection, doc_id);
 
-        let response = self
-            .client
-            .get(&url)
-            .bearer_auth(&token)
-            .send()
-            .await?;
+        let response = self.client.get(&url).bearer_auth(&token).send().await?;
 
         if response.status() == 404 {
             return Ok(None);
@@ -175,7 +170,7 @@ impl FirebaseClient {
     /// Set/update a document (merge)
     pub async fn set_document(&self, collection: &str, doc_id: &str, data: &Value) -> Result<()> {
         let token = self.get_access_token().await?;
-        
+
         // Build updateMask from top-level field names
         let field_paths: String = data
             .as_object()
@@ -186,7 +181,7 @@ impl FirebaseClient {
                     .join("&")
             })
             .unwrap_or_default();
-        
+
         let url = format!(
             "{}/{}/{}?{}",
             self.base_url(),
@@ -262,7 +257,9 @@ impl FirebaseClient {
         doc_id: &str,
         subcollection: &str,
     ) -> Result<Vec<Value>> {
-        let docs = self.query_subcollection_with_ids(collection, doc_id, subcollection).await?;
+        let docs = self
+            .query_subcollection_with_ids(collection, doc_id, subcollection)
+            .await?;
         Ok(docs.into_iter().map(|(_, v)| v).collect())
     }
 
@@ -292,12 +289,7 @@ impl FirebaseClient {
                 url.push_str(&format!("&pageToken={}", t));
             }
 
-            let response = self
-                .client
-                .get(&url)
-                .bearer_auth(&token)
-                .send()
-                .await?;
+            let response = self.client.get(&url).bearer_auth(&token).send().await?;
 
             if !response.status().is_success() {
                 let status = response.status();
@@ -307,12 +299,13 @@ impl FirebaseClient {
             }
 
             let result: Value = response.json().await?;
-            
+
             if let Some(arr) = result["documents"].as_array() {
                 for doc in arr {
-                    if let Some(id) = doc["name"].as_str()
+                    if let Some(id) = doc["name"]
+                        .as_str()
                         .and_then(|name| name.split('/').last())
-                        .map(|s| s.to_string()) 
+                        .map(|s| s.to_string())
                     {
                         let data = from_firestore_document(doc);
                         all_docs.push((id, data));
@@ -328,7 +321,7 @@ impl FirebaseClient {
                     } else {
                         break;
                     }
-                },
+                }
                 None => break,
             }
         }
@@ -341,12 +334,7 @@ impl FirebaseClient {
         let token = self.get_access_token().await?;
         let url = format!("{}/{}/{}", self.base_url(), collection, doc_id);
 
-        let response = self
-            .client
-            .delete(&url)
-            .bearer_auth(&token)
-            .send()
-            .await?;
+        let response = self.client.delete(&url).bearer_auth(&token).send().await?;
 
         if !response.status().is_success() && response.status() != 404 {
             let status = response.status();
@@ -363,12 +351,7 @@ impl FirebaseClient {
         let token = self.get_access_token().await?;
         let url = format!("{}/users", self.base_url());
 
-        let response = self
-            .client
-            .get(&url)
-            .bearer_auth(&token)
-            .send()
-            .await?;
+        let response = self.client.get(&url).bearer_auth(&token).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();

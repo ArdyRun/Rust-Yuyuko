@@ -5,8 +5,8 @@ use poise::serenity_prelude as serenity;
 use std::env;
 use tracing::{error, info};
 
-use crate::api::jimaku::{search_anime, get_entry, get_files, download_file};
 use crate::api::anilist::{search_media, MediaType};
+use crate::api::jimaku::{download_file, get_entry, get_files, search_anime};
 use crate::{Context, Error};
 
 const MAX_FILE_SIZE: u64 = 8 * 1024 * 1024; // 8MB Discord limit
@@ -18,8 +18,7 @@ pub async fn subs(
     #[description = "Anime name or Jimaku ID"]
     #[autocomplete = "autocomplete_anime"]
     name: String,
-    #[description = "Episode number (optional)"]
-    episode: Option<i32>,
+    #[description = "Episode number (optional)"] episode: Option<i32>,
 ) -> Result<(), Error> {
     let api_key = match env::var("JIMAKU_API_KEY") {
         Ok(key) => key,
@@ -39,9 +38,10 @@ pub async fn subs(
     } else {
         // Search for the anime
         let results = search_anime(http_client, &api_key, &name).await?;
-        
+
         if results.is_empty() {
-            ctx.say(format!("No anime found with keyword: **{}**", name)).await?;
+            ctx.say(format!("No anime found with keyword: **{}**", name))
+                .await?;
             return Ok(());
         }
 
@@ -71,8 +71,14 @@ pub async fn subs(
     let files = get_files(http_client, &api_key, entry_id, episode).await?;
 
     if files.is_empty() {
-        let episode_text = episode.map(|e| format!(" episode {}", e)).unwrap_or_default();
-        ctx.say(format!("No subtitle files found for **{}**{}", entry.name, episode_text)).await?;
+        let episode_text = episode
+            .map(|e| format!(" episode {}", e))
+            .unwrap_or_default();
+        ctx.say(format!(
+            "No subtitle files found for **{}**{}",
+            entry.name, episode_text
+        ))
+        .await?;
         return Ok(());
     }
 
@@ -101,7 +107,8 @@ pub async fn subs(
     }
 
     // Send info embed to channel
-    ctx.send(poise::CreateReply::default().embed(channel_embed)).await?;
+    ctx.send(poise::CreateReply::default().embed(channel_embed))
+        .await?;
 
     // Create DM embed with file list
     let mut dm_embed = serenity::CreateEmbed::new()
@@ -131,7 +138,7 @@ pub async fn subs(
         let file_size_kb = file.size as f64 / 1024.0;
         file_list.push_str(&format!("**{}**\n", file.name));
         file_list.push_str(&format!("Size: {:.2} KB\n", file_size_kb));
-        
+
         // Download file if not too large
         if file.size < MAX_FILE_SIZE {
             match download_file(http_client, &file.url).await {
@@ -167,14 +174,15 @@ pub async fn subs(
         Ok(ch) => ch,
         Err(e) => {
             error!("Cannot create DM channel: {:?}", e);
-            ctx.say("Cannot send DM. Please check your privacy settings and try again.").await?;
+            ctx.say("Cannot send DM. Please check your privacy settings and try again.")
+                .await?;
             return Ok(());
         }
     };
 
     // Build message with attachments
     let mut dm_message = serenity::CreateMessage::new().embed(dm_embed);
-    
+
     for attachment in attachments {
         dm_message = dm_message.add_file(attachment);
     }
@@ -185,7 +193,8 @@ pub async fn subs(
         }
         Err(e) => {
             error!("Error sending DM: {:?}", e);
-            ctx.say("Cannot send DM. Please check your privacy settings and try again.").await?;
+            ctx.say("Cannot send DM. Please check your privacy settings and try again.")
+                .await?;
         }
     }
 
@@ -233,6 +242,6 @@ async fn autocomplete_anime<'a>(
             Err(_) => vec![],
         }
     };
-    
+
     results.await.into_iter()
 }

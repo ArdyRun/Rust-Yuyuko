@@ -89,7 +89,7 @@ impl User {
     #[allow(dead_code)]
     pub fn total_points(&self) -> i64 {
         use crate::utils::points::calculate_points;
-        
+
         self.stats
             .iter()
             .map(|(media_type, stats)| calculate_points(media_type, stats.total))

@@ -1,8 +1,8 @@
 // Export command - export immersion logs as text file
 // Ported from commands/export.js
 
+use chrono::{DateTime, Duration, Utc};
 use poise::serenity_prelude as serenity;
-use chrono::{DateTime, Utc, Duration};
 use tracing::error;
 
 use crate::utils::config::get_media_label;
@@ -99,10 +99,8 @@ impl ExportMediaType {
 #[poise::command(slash_command, prefix_command)]
 pub async fn export(
     ctx: Context<'_>,
-    #[description = "Timeframe to export logs"]
-    timeframe: Timeframe,
-    #[description = "Filter by media type (optional)"]
-    mediatype: Option<ExportMediaType>,
+    #[description = "Timeframe to export logs"] timeframe: Timeframe,
+    #[description = "Filter by media type (optional)"] mediatype: Option<ExportMediaType>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
 
@@ -112,13 +110,16 @@ pub async fn export(
     let media_filter = mediatype.unwrap_or(ExportMediaType::All);
 
     // Fetch user logs from Firebase subcollection
-    let logs_result = firebase.query_subcollection("users", &user_id, "immersion_logs").await;
-    
+    let logs_result = firebase
+        .query_subcollection("users", &user_id, "immersion_logs")
+        .await;
+
     let all_logs: Vec<serde_json::Value> = match logs_result {
         Ok(logs) => logs,
         Err(e) => {
             error!("Failed to fetch logs: {:?}", e);
-            ctx.say("Failed to export logs. Please try again later.").await?;
+            ctx.say("Failed to export logs. Please try again later.")
+                .await?;
             return Ok(());
         }
     };
@@ -150,7 +151,7 @@ pub async fn export(
                     .and_then(|a| a.get("type"))
                     .and_then(|t| t.as_str())
                     .unwrap_or("");
-                
+
                 if log_type != filter_type {
                     return false;
                 }
@@ -172,9 +173,10 @@ pub async fn export(
         Timeframe::All => "all",
     };
     let media_label = media_filter.as_str().unwrap_or("all");
-    let filename = format!("immersion_logs_{}_{}_{}_{}.txt", 
-        user.name, 
-        timeframe_label, 
+    let filename = format!(
+        "immersion_logs_{}_{}_{}_{}.txt",
+        user.name,
+        timeframe_label,
         media_label,
         Utc::now().format("%Y%m%d")
     );
@@ -197,8 +199,9 @@ pub async fn export(
                 timeframe.as_str(),
                 media_type_text
             ))
-            .attachment(attachment)
-    ).await?;
+            .attachment(attachment),
+    )
+    .await?;
 
     Ok(())
 }
@@ -210,14 +213,17 @@ fn generate_export_content(
     username: &str,
 ) -> String {
     let mut content = String::new();
-    
+
     content.push_str("Immersion Logs Export\n");
     content.push_str("====================\n\n");
     content.push_str(&format!("User: {}\n", username));
     content.push_str(&format!("Timeframe: {}\n", timeframe.as_str()));
     content.push_str(&format!("Media Type: {}\n", media_type.label()));
     content.push_str(&format!("Total Logs: {}\n", logs.len()));
-    content.push_str(&format!("Export Date: {}\n\n", Utc::now().format("%Y-%m-%d %H:%M:%S UTC")));
+    content.push_str(&format!(
+        "Export Date: {}\n\n",
+        Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+    ));
 
     if logs.is_empty() {
         content.push_str("No immersion logs found for the selected timeframe and media type.\n");
@@ -230,8 +236,14 @@ fn generate_export_content(
 
     for log in logs {
         if let Some(activity) = log.get("activity") {
-            let log_type = activity.get("type").and_then(|t| t.as_str()).unwrap_or("unknown");
-            let amount = activity.get("amount").and_then(|a| a.as_f64()).unwrap_or(0.0);
+            let log_type = activity
+                .get("type")
+                .and_then(|t| t.as_str())
+                .unwrap_or("unknown");
+            let amount = activity
+                .get("amount")
+                .and_then(|a| a.as_f64())
+                .unwrap_or(0.0);
 
             let entry = stats.entry(log_type.to_string()).or_insert((0, 0.0));
             entry.0 += 1;
@@ -244,7 +256,10 @@ fn generate_export_content(
     for (type_name, (count, total)) in &stats {
         let label = get_media_label(type_name);
         let unit = get_unit_for_type(type_name);
-        content.push_str(&format!("{}: {} sessions, {:.1} total {}\n", label, count, total, unit));
+        content.push_str(&format!(
+            "{}: {} sessions, {:.1} total {}\n",
+            label, count, total, unit
+        ));
     }
     content.push_str("\n\n");
 
@@ -254,13 +269,28 @@ fn generate_export_content(
 
     for (index, log) in logs.iter().enumerate() {
         if let Some(activity) = log.get("activity") {
-            let amount = activity.get("amount").and_then(|a| a.as_f64()).unwrap_or(0.0);
+            let amount = activity
+                .get("amount")
+                .and_then(|a| a.as_f64())
+                .unwrap_or(0.0);
             let unit = activity.get("unit").and_then(|u| u.as_str()).unwrap_or("");
-            let type_label = activity.get("typeLabel").and_then(|t| t.as_str()).unwrap_or("Unknown");
-            let title = activity.get("title").and_then(|t| t.as_str()).unwrap_or("-");
+            let type_label = activity
+                .get("typeLabel")
+                .and_then(|t| t.as_str())
+                .unwrap_or("Unknown");
+            let title = activity
+                .get("title")
+                .and_then(|t| t.as_str())
+                .unwrap_or("-");
 
-            content.push_str(&format!("{}. {:.0} {} of {}\n", index + 1, amount, unit, type_label));
-            
+            content.push_str(&format!(
+                "{}. {:.0} {} of {}\n",
+                index + 1,
+                amount,
+                unit,
+                type_label
+            ));
+
             if title != "-" && !title.is_empty() {
                 content.push_str(&format!("   Title: {}\n", title));
             }

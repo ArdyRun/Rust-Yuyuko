@@ -92,10 +92,10 @@ impl ImmersionLog {
         comment: Option<&str>,
     ) -> Self {
         use crate::utils::config::{get_effective_date, get_effective_date_string};
-        
+
         let now = chrono::Utc::now();
         let effective_date = get_effective_date();
-        
+
         Self {
             id: None,
             user: LogUser {

@@ -17,7 +17,11 @@ pub struct VideoInfo {
 /// Extract video ID from YouTube URL or direct ID
 pub fn extract_video_id(input: &str) -> Option<String> {
     // Direct video ID (11 characters)
-    if input.len() == 11 && input.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+    if input.len() == 11
+        && input
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
         return Some(input.to_string());
     }
 
@@ -50,20 +54,24 @@ pub fn normalize_url(video_id: &str) -> String {
 }
 
 /// Fetch video info from YouTube API
-pub async fn get_video_info(client: &reqwest::Client, api_key: &str, video_id: &str) -> Result<Option<VideoInfo>> {
+pub async fn get_video_info(
+    client: &reqwest::Client,
+    api_key: &str,
+    video_id: &str,
+) -> Result<Option<VideoInfo>> {
     let url = format!(
         "https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id={}&key={}",
         video_id, api_key
     );
 
     let response = client.get(&url).send().await?;
-    
+
     if !response.status().is_success() {
         return Ok(None);
     }
 
     let data: YouTubeResponse = response.json().await?;
-    
+
     if data.items.is_empty() {
         return Ok(None);
     }
@@ -74,7 +82,10 @@ pub async fn get_video_info(client: &reqwest::Client, api_key: &str, video_id: &
     Ok(Some(VideoInfo {
         title: item.snippet.title.clone(),
         duration_seconds: duration,
-        thumbnail: item.snippet.thumbnails.get("high")
+        thumbnail: item
+            .snippet
+            .thumbnails
+            .get("high")
             .or_else(|| item.snippet.thumbnails.get("medium"))
             .or_else(|| item.snippet.thumbnails.get("default"))
             .map(|t| t.url.clone()),
@@ -86,7 +97,7 @@ pub async fn get_video_info(client: &reqwest::Client, api_key: &str, video_id: &
 fn parse_iso8601_duration(duration: &str) -> i32 {
     let mut seconds = 0;
     let mut current_num = String::new();
-    
+
     for c in duration.chars() {
         if c.is_ascii_digit() {
             current_num.push(c);
@@ -102,7 +113,7 @@ fn parse_iso8601_duration(duration: &str) -> i32 {
             current_num.clear();
         }
     }
-    
+
     seconds
 }
 
@@ -143,7 +154,10 @@ mod tests {
 
     #[test]
     fn test_extract_video_id() {
-        assert_eq!(extract_video_id("dQw4w9WgXcQ"), Some("dQw4w9WgXcQ".to_string()));
+        assert_eq!(
+            extract_video_id("dQw4w9WgXcQ"),
+            Some("dQw4w9WgXcQ".to_string())
+        );
         assert_eq!(
             extract_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
             Some("dQw4w9WgXcQ".to_string())

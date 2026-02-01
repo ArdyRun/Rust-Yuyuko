@@ -3,7 +3,7 @@
 
 use poise::serenity_prelude as serenity;
 
-use crate::commands::afk::{get_afk_data, remove_afk, is_afk};
+use crate::commands::afk::{get_afk_data, is_afk, remove_afk};
 
 /// Handle AFK-related events on message create
 pub async fn handle_afk_message(
@@ -20,24 +20,32 @@ pub async fn handle_afk_message(
         if let Some(_afk_data) = remove_afk(msg.author.id.get()).await {
             let embed = serenity::CreateEmbed::new()
                 .color(0x2ecc71) // Green
-                .author(serenity::CreateEmbedAuthor::new(&msg.author.name)
-                    .icon_url(msg.author.avatar_url().unwrap_or_else(|| msg.author.default_avatar_url())))
+                .author(
+                    serenity::CreateEmbedAuthor::new(&msg.author.name).icon_url(
+                        msg.author
+                            .avatar_url()
+                            .unwrap_or_else(|| msg.author.default_avatar_url()),
+                    ),
+                )
                 .title("Selamat Datang Kembali")
                 .description("Status AFK kamu telah dihapus")
                 .timestamp(serenity::Timestamp::now());
 
-            let reply = msg.channel_id.send_message(
-                &ctx.http,
-                serenity::CreateMessage::new()
-                    .embed(embed)
-                    .reference_message(msg)
-            ).await?;
+            let reply = msg
+                .channel_id
+                .send_message(
+                    &ctx.http,
+                    serenity::CreateMessage::new()
+                        .embed(embed)
+                        .reference_message(msg),
+                )
+                .await?;
 
             // Delete the welcome back message after 5 seconds
             let http = ctx.http.clone();
             let channel_id = msg.channel_id;
             let message_id = reply.id;
-            
+
             tokio::spawn(async move {
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 let _ = channel_id.delete_message(&http, message_id).await;
@@ -50,22 +58,25 @@ pub async fn handle_afk_message(
         if let Some(afk_data) = get_afk_data(mentioned_user.id.get()).await {
             let embed = serenity::CreateEmbed::new()
                 .color(0xe67e22) // Orange
-                .author(serenity::CreateEmbedAuthor::new(&afk_data.username)
-                    .icon_url(&afk_data.avatar_url))
+                .author(
+                    serenity::CreateEmbedAuthor::new(&afk_data.username)
+                        .icon_url(&afk_data.avatar_url),
+                )
                 .title(format!("{} sedang AFK", afk_data.username))
                 .description(format!(
                     "**Alasan:** {}\n**Sejak:** <t:{}:R>",
-                    afk_data.reason,
-                    afk_data.timestamp
+                    afk_data.reason, afk_data.timestamp
                 ))
                 .timestamp(serenity::Timestamp::now());
 
-            msg.channel_id.send_message(
-                &ctx.http,
-                serenity::CreateMessage::new()
-                    .embed(embed)
-                    .reference_message(msg)
-            ).await?;
+            msg.channel_id
+                .send_message(
+                    &ctx.http,
+                    serenity::CreateMessage::new()
+                        .embed(embed)
+                        .reference_message(msg),
+                )
+                .await?;
         }
     }
 

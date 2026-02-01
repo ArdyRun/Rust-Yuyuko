@@ -1,11 +1,11 @@
 // Leaderboard command - view community rankings
 // Ported from commands/leaderboard.js
 
-use poise::serenity_prelude as serenity;
-use tracing::error;
 use crate::utils::config::colors;
 use crate::utils::points::calculate_points;
 use crate::{Context, Error};
+use poise::serenity_prelude as serenity;
+use tracing::error;
 
 /// Time period for leaderboard
 #[derive(Debug, Clone, Copy, poise::ChoiceParameter)]
@@ -113,12 +113,9 @@ pub enum MonthChoice {
 #[poise::command(slash_command, prefix_command)]
 pub async fn leaderboard(
     ctx: Context<'_>,
-    #[description = "Time period for the leaderboard"]
-    timestamp: TimePeriod,
-    #[description = "Media type for the leaderboard"]
-    media_type: LeaderboardMediaType,
-    #[description = "Month (for monthly leaderboard)"]
-    month: Option<MonthChoice>,
+    #[description = "Time period for the leaderboard"] timestamp: TimePeriod,
+    #[description = "Media type for the leaderboard"] media_type: LeaderboardMediaType,
+    #[description = "Month (for monthly leaderboard)"] month: Option<MonthChoice>,
     #[description = "Year"]
     #[min = 2020]
     year: Option<i32>,
@@ -131,8 +128,21 @@ pub async fn leaderboard(
     // Build title
     let mut title = format!("{} Leaderboard", timestamp.label());
     if let Some(m) = month {
-        let month_names = ["", "January", "February", "March", "April", "May", "June",
-                           "July", "August", "September", "October", "November", "December"];
+        let month_names = [
+            "",
+            "January",
+            "February",
+            "March",
+            "April",
+            "May",
+            "June",
+            "July",
+            "August",
+            "September",
+            "October",
+            "November",
+            "December",
+        ];
         let y = year.unwrap_or_else(|| chrono::Utc::now().year());
         title = format!("{} - {} {}", title, month_names[m as usize], y);
     } else if let Some(y) = year {
@@ -165,7 +175,11 @@ pub async fn leaderboard(
         let display_name = profile
             .and_then(|p| p.get("displayName"))
             .and_then(|v| v.as_str())
-            .or_else(|| profile.and_then(|p| p.get("username")).and_then(|v| v.as_str()))
+            .or_else(|| {
+                profile
+                    .and_then(|p| p.get("username"))
+                    .and_then(|v| v.as_str())
+            })
             .unwrap_or("Unknown");
 
         if matches!(timestamp, TimePeriod::AllTime) {
@@ -240,13 +254,20 @@ pub async fn leaderboard(
     }
 
     // Sort by points
-    leaderboard.sort_by(|a, b| b.points.partial_cmp(&a.points).unwrap_or(std::cmp::Ordering::Equal));
+    leaderboard.sort_by(|a, b| {
+        b.points
+            .partial_cmp(&a.points)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     if leaderboard.is_empty() {
         let embed = serenity::CreateEmbed::new()
             .title(format!("{} ({})", title, media_type.label()))
-            .description(format!("No immersion data found for the **{}** period and **{}** media type.", 
-                timestamp.label(), media_type.label()))
+            .description(format!(
+                "No immersion data found for the **{}** period and **{}** media type.",
+                timestamp.label(),
+                media_type.label()
+            ))
             .color(colors::INFO);
 
         ctx.send(poise::CreateReply::default().embed(embed)).await?;

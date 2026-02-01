@@ -40,7 +40,7 @@ pub async fn search_vns(
     }
 
     let data: VndbResponse = response.json().await?;
-    
+
     let results = data
         .results
         .into_iter()
@@ -60,10 +60,7 @@ pub async fn search_vns(
 }
 
 /// Get visual novel info by ID
-pub async fn get_vn_by_id(
-    client: &reqwest::Client,
-    id: &str,
-) -> Result<Option<VnInfo>> {
+pub async fn get_vn_by_id(client: &reqwest::Client, id: &str) -> Result<Option<VnInfo>> {
     let request = VndbRequest {
         filters: vec!["id".to_string(), "=".to_string(), id.to_string()],
         fields: "id, title, image.url, released, length, developers.name, description".to_string(),
@@ -81,7 +78,7 @@ pub async fn get_vn_by_id(
     }
 
     let data: VndbResponse = response.json().await?;
-    
+
     if let Some(v) = data.results.first() {
         Ok(Some(VnInfo {
             id: v.id.clone(),

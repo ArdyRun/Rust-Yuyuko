@@ -100,10 +100,7 @@ pub async fn get_files(
     Ok(files)
 }
 
-pub async fn download_file(
-    client: &reqwest::Client,
-    url: &str,
-) -> Result<Vec<u8>> {
+pub async fn download_file(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
     let response = client.get(url).send().await?;
     let bytes = response.bytes().await?;
     Ok(bytes.to_vec())

@@ -79,7 +79,7 @@ pub async fn search_media(
     }
 
     let data: AniListResponse = response.json().await?;
-    
+
     let results = data
         .data
         .page
@@ -88,7 +88,9 @@ pub async fn search_media(
         .take(limit)
         .map(|m| AniListMedia {
             id: m.id,
-            title: m.title.english
+            title: m
+                .title
+                .english
                 .or(m.title.romaji.clone())
                 .or(m.title.native)
                 .unwrap_or_else(|| "Unknown".to_string()),
@@ -143,11 +145,13 @@ pub async fn get_media_by_id(
     }
 
     let data: AniListSingleResponse = response.json().await?;
-    
+
     if let Some(m) = data.data.media {
         Ok(Some(AniListMedia {
             id: m.id,
-            title: m.title.english
+            title: m
+                .title
+                .english
                 .or(m.title.romaji.clone())
                 .or(m.title.native)
                 .unwrap_or_else(|| "Unknown".to_string()),

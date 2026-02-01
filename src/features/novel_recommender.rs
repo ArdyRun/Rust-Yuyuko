@@ -1,11 +1,11 @@
-use serde::{Deserialize, Serialize};
 use rand::prelude::IndexedRandom;
+use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
-use tracing::{error, info, debug};
+use tracing::{debug, error, info};
 use unicode_normalization::UnicodeNormalization;
 
-use crate::Data;
 use crate::api::llm::completion_gemini;
+use crate::Data;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Novel {
@@ -26,21 +26,25 @@ pub fn get_novels() -> &'static [Novel] {
             "src/data/novelList.json",
             "data/novelList.json",
         ];
-        
+
         for path in &paths {
             if let Ok(content) = std::fs::read_to_string(path) {
                 match serde_json::from_str::<Vec<Novel>>(&content) {
                     Ok(novels) => {
-                        info!("Novel recommender loaded {} novels from {}", novels.len(), path);
+                        info!(
+                            "Novel recommender loaded {} novels from {}",
+                            novels.len(),
+                            path
+                        );
                         return novels;
-                    },
+                    }
                     Err(e) => {
                         error!("Failed to parse {}: {:?}", path, e);
                     }
                 }
             }
         }
-        
+
         error!("Failed to load novelList.json from any path");
         Vec::new()
     })
@@ -60,7 +64,7 @@ fn normalize_string(s: &str) -> String {
 /// Detect JLPT level from user message
 fn detect_jlpt_level(text: &str) -> Option<&'static str> {
     let lower = text.to_lowercase();
-    
+
     if lower.contains("n5") || lower.contains("pemula") || lower.contains("beginner") {
         Some("N5 (beginner)")
     } else if lower.contains("n4") || lower.contains("elementary") {
@@ -79,7 +83,7 @@ fn detect_jlpt_level(text: &str) -> Option<&'static str> {
 /// Detect genre from user message
 fn detect_genre(text: &str) -> Option<&'static str> {
     let lower = text.to_lowercase();
-    
+
     let genres = [
         ("romance", "romance"),
         ("romantic", "romance"),
@@ -106,7 +110,7 @@ fn detect_genre(text: &str) -> Option<&'static str> {
         ("psychological", "psychological"),
         ("supernatural", "supernatural"),
     ];
-    
+
     for (keyword, genre) in genres {
         if lower.contains(keyword) {
             return Some(genre);
@@ -119,7 +123,8 @@ fn detect_genre(text: &str) -> Option<&'static str> {
 pub fn recommend_novels(count: usize) -> String {
     let novels = get_novels();
     if novels.is_empty() {
-        return "Maaf, aku belum menemukan daftar novelnya... Sepertinya ada yang salah.".to_string();
+        return "Maaf, aku belum menemukan daftar novelnya... Sepertinya ada yang salah."
+            .to_string();
     }
 
     let mut rng = rand::rng();
@@ -127,10 +132,16 @@ pub fn recommend_novels(count: usize) -> String {
 
     let mut response = "**Rekomendasi Novel untukmu:**\n\n".to_string();
     for (i, novel) in selected.iter().enumerate() {
-        response.push_str(&format!("{}. [{}]({})\n   Format: {} | Size: {}\n\n", 
-            i + 1, novel.title, novel.url, novel.format, novel.size));
+        response.push_str(&format!(
+            "{}. [{}]({})\n   Format: {} | Size: {}\n\n",
+            i + 1,
+            novel.title,
+            novel.url,
+            novel.format,
+            novel.size
+        ));
     }
-    
+
     response.push_str("Semoga suka ya! Jangan lupa baca~");
     response
 }
@@ -145,8 +156,11 @@ pub async fn smart_novel_search(data: &Data, query: &str) -> String {
     // Detect JLPT level or genre
     let level = detect_jlpt_level(query);
     let genre = detect_genre(query);
-    
-    debug!("Smart novel search - Level: {:?}, Genre: {:?}", level, genre);
+
+    debug!(
+        "Smart novel search - Level: {:?}, Genre: {:?}",
+        level, genre
+    );
 
     // Build LLM prompt based on detected intent
     let prompt = if let Some(lvl) = level {
@@ -169,16 +183,14 @@ pub async fn smart_novel_search(data: &Data, query: &str) -> String {
 
     // Call LLM for suggestions
     let suggested_titles = match completion_gemini(data, &prompt).await {
-        Ok(response) => {
-            response
-                .lines()
-                .map(|l| l.trim())
-                .filter(|l| !l.is_empty() && !l.starts_with(|c: char| c.is_ascii_digit()))
-                .map(|l| l.trim_start_matches(|c: char| c == '-' || c == '.' || c == ' '))
-                .map(|l| l.trim_matches(|c: char| c == '"' || c == '\'' || c == '「' || c == '」'))
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
-        }
+        Ok(response) => response
+            .lines()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty() && !l.starts_with(|c: char| c.is_ascii_digit()))
+            .map(|l| l.trim_start_matches(|c: char| c == '-' || c == '.' || c == ' '))
+            .map(|l| l.trim_matches(|c: char| c == '"' || c == '\'' || c == '「' || c == '」'))
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>(),
         Err(e) => {
             error!("LLM suggestion failed: {:?}", e);
             return recommend_novels(5); // Fallback to random
@@ -188,14 +200,18 @@ pub async fn smart_novel_search(data: &Data, query: &str) -> String {
     debug!("LLM suggested titles: {:?}", suggested_titles);
 
     // Match suggested titles with database
-    let normalized_suggestions: Vec<String> = suggested_titles.iter()
+    let normalized_suggestions: Vec<String> = suggested_titles
+        .iter()
         .map(|t| normalize_string(t))
         .collect();
 
-    let mut results: Vec<&Novel> = novels.iter()
+    let mut results: Vec<&Novel> = novels
+        .iter()
         .filter(|novel| {
             let norm_title = normalize_string(&novel.title);
-            normalized_suggestions.iter().any(|s| norm_title.contains(s) || s.contains(&norm_title))
+            normalized_suggestions
+                .iter()
+                .any(|s| norm_title.contains(s) || s.contains(&norm_title))
         })
         .take(10)
         .collect();
@@ -203,7 +219,8 @@ pub async fn smart_novel_search(data: &Data, query: &str) -> String {
     // If no matches from LLM, try direct search
     if results.is_empty() {
         let norm_query = normalize_string(query);
-        results = novels.iter()
+        results = novels
+            .iter()
             .filter(|novel| normalize_string(&novel.title).contains(&norm_query))
             .take(10)
             .collect();
@@ -231,7 +248,11 @@ pub async fn smart_novel_search(data: &Data, query: &str) -> String {
     for (i, novel) in results.iter().enumerate() {
         response.push_str(&format!(
             "{}. [{}]({})\n   Format: {} | Size: {}\n\n",
-            i + 1, novel.title, novel.url, novel.format, novel.size
+            i + 1,
+            novel.title,
+            novel.url,
+            novel.format,
+            novel.size
         ));
     }
 

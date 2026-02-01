@@ -1,10 +1,10 @@
 // Novel search command - search and download light novels
 // Ported from commands/downNovel.js
 
+use once_cell::sync::Lazy;
 use poise::serenity_prelude as serenity;
 use serde::Deserialize;
 use std::time::Duration;
-use once_cell::sync::Lazy;
 use tracing::{error, info};
 
 use crate::utils::config::colors;
@@ -33,7 +33,10 @@ static NOVELS: Lazy<Vec<NovelEntry>> = Lazy::new(|| {
 fn load_novels() -> Result<Vec<NovelEntry>, Box<dyn std::error::Error + Send + Sync>> {
     // Log current working directory for debugging
     if let Ok(cwd) = std::env::current_dir() {
-        info!("Novel loader - Current working directory: {}", cwd.display());
+        info!(
+            "Novel loader - Current working directory: {}",
+            cwd.display()
+        );
     }
 
     // Try multiple possible paths
@@ -50,19 +53,21 @@ fn load_novels() -> Result<Vec<NovelEntry>, Box<dyn std::error::Error + Send + S
 
     for path in paths {
         tried_paths.push(path);
-        
+
         match std::fs::read_to_string(path) {
-            Ok(content) => {
-                match serde_json::from_str::<Vec<NovelEntry>>(&content) {
-                    Ok(novels) => {
-                        info!("✓ Successfully loaded {} novels from {}", novels.len(), path);
-                        return Ok(novels);
-                    }
-                    Err(e) => {
-                        error!("✗ Found file at {} but failed to parse JSON: {:?}", path, e);
-                    }
+            Ok(content) => match serde_json::from_str::<Vec<NovelEntry>>(&content) {
+                Ok(novels) => {
+                    info!(
+                        "✓ Successfully loaded {} novels from {}",
+                        novels.len(),
+                        path
+                    );
+                    return Ok(novels);
                 }
-            }
+                Err(e) => {
+                    error!("✗ Found file at {} but failed to parse JSON: {:?}", path, e);
+                }
+            },
             Err(_) => {
                 // File not found at this path, continue to next
             }
@@ -74,13 +79,13 @@ fn load_novels() -> Result<Vec<NovelEntry>, Box<dyn std::error::Error + Send + S
     for path in &tried_paths {
         error!("  - {}", path);
     }
-    
+
     Err(format!(
         "Could not find novelList.json in any of these locations: {}",
         tried_paths.join(", ")
-    ).into())
+    )
+    .into())
 }
-
 
 const PAGE_SIZE: usize = 10;
 
@@ -90,13 +95,18 @@ pub async fn novel(
     ctx: Context<'_>,
     #[description = "Judul light novel (kanji/kana/romaji)"] title: String,
 ) -> Result<(), Error> {
-    info!("Novel command executed by user {} with query: {}", ctx.author().id, title);
+    info!(
+        "Novel command executed by user {} with query: {}",
+        ctx.author().id,
+        title
+    );
     ctx.defer().await?;
 
     // Check if novels loaded
     if NOVELS.is_empty() {
         error!("Novel database is empty - novelList.json was not loaded successfully");
-        ctx.say("Maaf, database novel belum bisa dimuat. Hubungi admin untuk cek log bot ya!").await?;
+        ctx.say("Maaf, database novel belum bisa dimuat. Hubungi admin untuk cek log bot ya!")
+            .await?;
         return Ok(());
     }
 
@@ -110,7 +120,8 @@ pub async fn novel(
         .collect();
 
     if results.is_empty() {
-        ctx.say("Tidak ditemukan novel dengan judul tersebut.").await?;
+        ctx.say("Tidak ditemukan novel dengan judul tersebut.")
+            .await?;
         return Ok(());
     }
 
@@ -121,11 +132,13 @@ pub async fn novel(
     let embed = create_embed(&results, 0, total_results);
     let components = create_buttons(0, total_pages);
 
-    let reply = ctx.send(
-        poise::CreateReply::default()
-            .embed(embed)
-            .components(components)
-    ).await?;
+    let reply = ctx
+        .send(
+            poise::CreateReply::default()
+                .embed(embed)
+                .components(components),
+        )
+        .await?;
 
     // Handle button interactions
     let msg = reply.message().await?;
@@ -163,7 +176,7 @@ pub async fn novel(
                 serenity::CreateInteractionResponse::UpdateMessage(
                     serenity::CreateInteractionResponseMessage::new()
                         .embed(new_embed)
-                        .components(new_components)
+                        .components(new_components),
                 ),
             )
             .await?;
@@ -171,12 +184,14 @@ pub async fn novel(
 
     // Disable buttons after timeout - update the original reply
     let disabled_components = create_disabled_buttons();
-    let _ = reply.edit(
-        ctx,
-        poise::CreateReply::default()
-            .embed(create_embed(&results, current_page, total_results))
-            .components(disabled_components)
-    ).await;
+    let _ = reply
+        .edit(
+            ctx,
+            poise::CreateReply::default()
+                .embed(create_embed(&results, current_page, total_results))
+                .components(disabled_components),
+        )
+        .await;
 
     Ok(())
 }
