@@ -96,11 +96,11 @@ pub static QUIZZES: Lazy<HashMap<String, QuizInfo>> = Lazy::new(|| {
         value: "Level_4",
         role_id: serenity::RoleId::new(1392066020235153408),
         commands: &[
-            "k!quiz gn2 nd 1 mmq=4 atl=60",
-            "k!quiz jpdb3k5k 1 hardcore nd mmq=10 dauq=1 font=5 atl=16 color=#f173ff size=100 effect=antiocr"
+            "k!quiz gn2 nd 20 mmq=4 atl=60",
+            "k!quiz jpdb3k5k 40 hardcore nd mmq=10 dauq=1 font=5 atl=16 color=#f173ff size=100 effect=antiocr"
         ],
         deck_names: &["JLPT N2 Grammar Quiz", "jpdb3k5k"],
-        score_limits: &["1", "1"],
+        score_limits: &["20", "40"],
     });
 
     m.insert("Level_5".to_string(), QuizInfo {
@@ -395,7 +395,9 @@ pub async fn handle_message(
 
             if let Some(gc) = channel {
                 let guild_id = gc.guild_id.to_string();
-                let category_id = if let Some(config) = data.guild_configs.get(&guild_id) {
+                let category_id = if let Some(config) =
+                    crate::utils::config::get_guild_config(data, &guild_id).await
+                {
                     config
                         .quiz_category_id
                         .as_ref()
@@ -408,7 +410,9 @@ pub async fn handle_message(
                 if let Some(cat_id) = category_id {
                     if gc.parent_id == Some(cat_id) {
                         // Check if this is the configured selector channel
-                        if let Some(config) = data.guild_configs.get(&guild_id) {
+                        if let Some(config) =
+                            crate::utils::config::get_guild_config(data, &guild_id).await
+                        {
                             if let Some(selector_id) = &config.quiz_channel_id {
                                 if gc.id.to_string() == *selector_id {
                                     let _ = msg.reply(&ctx.http, "Cannot delete main selector channel (Protected via Config).").await;
@@ -522,7 +526,7 @@ pub async fn handle_message(
                             .reply(
                                 &ctx.http,
                                 format!(
-                                    "✅ **Reset Complete**: Removed {} quiz roles from <@{}>.",
+                                    "**Reset Complete**: Removed {} quiz roles from <@{}>.",
                                     removed_count, target_id
                                 ),
                             )
@@ -741,6 +745,20 @@ async fn handle_kotoba_message(
                         "**SELAMAT**! Kamu sekarang mendapatkan role **{}**.\nChannel ini akan dihapus dalam 30 detik.", 
                         quiz.label
                     )).await;
+
+                    // Announcement to public channel
+                    if let Some(cfg) =
+                        crate::utils::config::get_guild_config(data, &guild_id.to_string()).await
+                    {
+                        if let Some(annu_id) = &cfg.role_rank_announcement_channel_id {
+                            if let Ok(target_channel) = annu_id.parse::<serenity::ChannelId>() {
+                                let _ = target_channel.say(&ctx.http, format!(
+                                    "Selamat kepada <@{}> yang telah berhasil mendapatkan role **{}**!",
+                                    member.user.id, quiz.label
+                                )).await;
+                            }
+                        }
+                    }
                 }
             }
 
