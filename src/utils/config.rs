@@ -88,3 +88,31 @@ mod tests {
         assert_eq!(get_unit("manga"), "pages");
     }
 }
+
+use crate::models::guild::GuildConfig;
+use crate::Data;
+use tracing::error;
+
+/// Helper to get guild config with cache + fallback to Firebase
+pub async fn get_guild_config(data: &Data, guild_id: &str) -> Option<GuildConfig> {
+    // 1. Check Cache
+    if let Some(config) = data.guild_configs.get(guild_id) {
+        return Some(config.clone());
+    }
+
+    // 2. Fetch from Firebase
+    match data.firebase.get_document("guilds", guild_id).await {
+        Ok(Some(doc)) => {
+            let config = serde_json::from_value::<GuildConfig>(doc).unwrap_or_default();
+            // 3. Update Cache
+            data.guild_configs
+                .insert(guild_id.to_string(), config.clone());
+            Some(config)
+        }
+        Ok(None) => None,
+        Err(e) => {
+            error!("Failed to fetch guild config for {}: {:?}", guild_id, e);
+            None
+        }
+    }
+}

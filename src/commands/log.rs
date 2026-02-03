@@ -208,8 +208,9 @@ fn create_log_embed(
 
             let title_line = if let Some(ref title) = activity.title {
                 if title != "-" && !title.is_empty() {
-                    let truncated = if title.len() > 50 {
-                        format!("{}...", &title[..50])
+                    // Use char-based truncation to avoid panic on multi-byte UTF-8
+                    let truncated: String = if title.chars().count() > 50 {
+                        format!("{}...", title.chars().take(50).collect::<String>())
                     } else {
                         title.clone()
                     };
@@ -561,6 +562,9 @@ async fn handle_log_interactions(
 
 // ============ Firebase Functions ============
 
+/// Maximum logs to fetch per query (server-side limit)
+const MAX_LOGS_PER_QUERY: usize = 100;
+
 async fn fetch_user_logs(
     data: &crate::Data,
     user_id: &str,
@@ -574,9 +578,8 @@ async fn fetch_user_logs(
         now - Duration::days(7)
     };
 
-    // Query Firebase
-    let _collection_path = format!("users/{}/immersion_logs", user_id);
-
+    // Query Firebase using existing method (no composite index required)
+    // TODO: Once Firestore indexes are created, switch to run_query for efficiency
     match data
         .firebase
         .query_subcollection_with_ids("users", user_id, "immersion_logs")
@@ -608,6 +611,9 @@ async fn fetch_user_logs(
             // Sort by created date (newest first)
             logs.sort_by(|a, b| b.timestamps.created.cmp(&a.timestamps.created));
 
+            // Limit results to prevent memory bloat
+            logs.truncate(MAX_LOGS_PER_QUERY);
+
             logs
         }
         Err(e) => {
@@ -623,26 +629,41 @@ async fn delete_log_from_firebase(
     log_id: &str,
     activity: &LogActivity,
 ) -> Result<(), anyhow::Error> {
-    // Delete the log document
-    data.firebase
-        .delete_document(&format!("users/{}/immersion_logs", user_id), log_id)
+    use crate::api::firebase::TransactionWrite;
+
+    // Begin transaction for atomic delete + stats update
+    let tx_id = data.firebase.begin_transaction().await?;
+
+    // Read user document within transaction
+    let user_doc = data
+        .firebase
+        .get_document_in_transaction(&tx_id, "users", user_id)
         .await?;
 
-    // Update user stats (subtract the deleted amount)
-    // Fetch current stats
-    if let Ok(Some(user_doc)) = data.firebase.get_document("users", user_id).await {
-        let mut user_data: serde_json::Value = user_doc;
+    let mut writes = Vec::new();
+
+    // 1. Delete the log document
+    let log_path = format!("users/{}/immersion_logs/{}", user_id, log_id);
+    writes.push(TransactionWrite::Delete {
+        document_path: log_path,
+    });
+
+    // 2. Update user stats (if user doc exists)
+    if let Some(mut user_data) = user_doc {
+        let mut stats_changed = false;
 
         if let Some(stats) = user_data.get_mut("stats") {
             if let Some(type_stats) = stats.get_mut(&activity.activity_type) {
                 if let Some(total) = type_stats.get_mut("total") {
                     if let Some(t) = total.as_f64() {
                         *total = serde_json::json!(f64::max(0.0, t - activity.amount));
+                        stats_changed = true;
                     }
                 }
                 if let Some(sessions) = type_stats.get_mut("sessions") {
                     if let Some(s) = sessions.as_i64() {
                         *sessions = serde_json::json!(i64::max(0, s - 1));
+                        stats_changed = true;
                     }
                 }
             }
@@ -651,13 +672,20 @@ async fn delete_log_from_firebase(
         // Update timestamps
         if let Some(timestamps) = user_data.get_mut("timestamps") {
             timestamps["updated"] = serde_json::json!(Utc::now().to_rfc3339());
+            stats_changed = true;
         }
 
-        // Save updated stats
-        data.firebase
-            .set_document("users", user_id, &user_data)
-            .await?;
+        if stats_changed {
+            writes.push(TransactionWrite::Update {
+                document_path: format!("users/{}", user_id),
+                fields: user_data,
+            });
+        }
     }
+
+    // Commit transaction atomically
+    data.firebase.commit_transaction(&tx_id, writes).await?;
 
     Ok(())
 }
+

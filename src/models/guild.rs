@@ -13,4 +13,6 @@ pub struct GuildConfig {
     pub welcome_channel_id: Option<String>,
     /// Channel ID for Immersion logs
     pub immersion_channel_id: Option<String>,
+    /// Channel ID for Role Rank Announcements
+    pub role_rank_announcement_channel_id: Option<String>,
 }

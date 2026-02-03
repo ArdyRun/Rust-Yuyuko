@@ -36,6 +36,47 @@ struct CachedToken {
     expires_at: u64,
 }
 
+/// Filter for structured queries
+#[derive(Debug, Clone)]
+pub struct QueryFilter {
+    /// Field path, e.g., "timestamps.created" or "activity.type"
+    pub field: String,
+    /// Operator: "EQUAL", "LESS_THAN", "LESS_THAN_OR_EQUAL", 
+    /// "GREATER_THAN", "GREATER_THAN_OR_EQUAL", "NOT_EQUAL"
+    pub op: String,
+    /// Value in Firestore format (e.g., { "stringValue": "..." })
+    pub value: Value,
+}
+
+impl QueryFilter {
+    /// Create a new filter with a string value
+    pub fn string_eq(field: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            field: field.into(),
+            op: "EQUAL".to_string(),
+            value: json!({ "stringValue": value.into() }),
+        }
+    }
+
+    /// Create a >= filter with a timestamp value (RFC3339 string)
+    pub fn timestamp_gte(field: impl Into<String>, rfc3339: impl Into<String>) -> Self {
+        Self {
+            field: field.into(),
+            op: "GREATER_THAN_OR_EQUAL".to_string(),
+            value: json!({ "timestampValue": rfc3339.into() }),
+        }
+    }
+}
+
+/// Write operation for transactions
+#[derive(Debug, Clone)]
+pub enum TransactionWrite {
+    /// Delete a document by path (e.g., "users/123/immersion_logs/abc")
+    Delete { document_path: String },
+    /// Update specific fields in a document
+    Update { document_path: String, fields: Value },
+}
+
 /// Firebase REST API client
 pub struct FirebaseClient {
     client: Client,
@@ -380,6 +421,258 @@ impl FirebaseClient {
             .unwrap_or_default();
 
         Ok(docs)
+    }
+
+    // ============ Structured Queries ============
+
+    /// Run a structured query on a subcollection with server-side filtering.
+    /// Returns Vec<(doc_id, data)>.
+    ///
+    /// # Arguments
+    /// * `parent_collection` - e.g., "users"
+    /// * `parent_doc_id` - e.g., user ID
+    /// * `subcollection` - e.g., "immersion_logs"
+    /// * `filters` - List of (field_path, op, value) tuples
+    /// * `order_by` - Optional (field_path, direction) where direction is "ASCENDING" or "DESCENDING"
+    /// * `limit` - Max documents to return
+    /// * `start_after` - Optional cursor (document values to start after)
+    pub async fn run_query(
+        &self,
+        parent_collection: &str,
+        parent_doc_id: &str,
+        subcollection: &str,
+        filters: Vec<QueryFilter>,
+        order_by: Option<(&str, &str)>,
+        limit: usize,
+        start_after: Option<&Value>,
+    ) -> Result<Vec<(String, Value)>> {
+        let token = self.get_access_token().await?;
+        
+        // Parent path for the query
+        let parent = format!(
+            "projects/{}/databases/(default)/documents/{}/{}",
+            self.service_account.project_id, parent_collection, parent_doc_id
+        );
+        let url = format!(
+            "https://firestore.googleapis.com/v1/{}:runQuery",
+            parent
+        );
+
+        // Build structuredQuery
+        let mut query = json!({
+            "from": [{ "collectionId": subcollection }],
+            "limit": limit
+        });
+
+        // Add filters
+        if !filters.is_empty() {
+            let filter_clauses: Vec<Value> = filters
+                .iter()
+                .map(|f| {
+                    json!({
+                        "fieldFilter": {
+                            "field": { "fieldPath": &f.field },
+                            "op": &f.op,
+                            "value": f.value.clone()
+                        }
+                    })
+                })
+                .collect();
+
+            if filter_clauses.len() == 1 {
+                query["where"] = filter_clauses.into_iter().next().unwrap();
+            } else {
+                query["where"] = json!({
+                    "compositeFilter": {
+                        "op": "AND",
+                        "filters": filter_clauses
+                    }
+                });
+            }
+        }
+
+        // Add orderBy
+        if let Some((field, direction)) = order_by {
+            query["orderBy"] = json!([{
+                "field": { "fieldPath": field },
+                "direction": direction
+            }]);
+        }
+
+        // Add startAfter cursor
+        if let Some(cursor_values) = start_after {
+            query["startAt"] = json!({
+                "values": [cursor_values.clone()],
+                "before": false
+            });
+        }
+
+        let body = json!({ "structuredQuery": query });
+
+        let response = self
+            .client
+            .post(&url)
+            .bearer_auth(&token)
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            debug!("Firebase query error: {}", body);
+            return Err(anyhow!("Firebase query error: {}", status));
+        }
+
+        // Response is an array of { document: {...} } or { readTime: ... }
+        let results: Vec<Value> = response.json().await?;
+        let mut docs = Vec::new();
+
+        for item in results {
+            if let Some(doc) = item.get("document") {
+                if let Some(name) = doc["name"].as_str() {
+                    let id = name.split('/').last().unwrap_or("").to_string();
+                    let data = from_firestore_document(doc);
+                    docs.push((id, data));
+                }
+            }
+        }
+
+        Ok(docs)
+    }
+
+    // ============ Transactions ============
+
+    /// Begin a new Firestore transaction. Returns the transaction ID.
+    pub async fn begin_transaction(&self) -> Result<String> {
+        let token = self.get_access_token().await?;
+        let url = format!(
+            "https://firestore.googleapis.com/v1/projects/{}/databases/(default)/documents:beginTransaction",
+            self.service_account.project_id
+        );
+
+        let response = self
+            .client
+            .post(&url)
+            .bearer_auth(&token)
+            .json(&json!({}))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            debug!("Firebase beginTransaction error: {}", body);
+            return Err(anyhow!("Firebase beginTransaction error: {}", status));
+        }
+
+        let result: Value = response.json().await?;
+        let tx_id = result["transaction"]
+            .as_str()
+            .ok_or_else(|| anyhow!("No transaction ID in response"))?;
+
+        Ok(tx_id.to_string())
+    }
+
+    /// Commit a transaction with a list of writes.
+    /// All writes are applied atomically.
+    pub async fn commit_transaction(
+        &self,
+        transaction_id: &str,
+        writes: Vec<TransactionWrite>,
+    ) -> Result<()> {
+        let token = self.get_access_token().await?;
+        let url = format!(
+            "https://firestore.googleapis.com/v1/projects/{}/databases/(default)/documents:commit",
+            self.service_account.project_id
+        );
+
+        let write_objects: Vec<Value> = writes
+            .into_iter()
+            .map(|w| match w {
+                TransactionWrite::Delete { document_path } => {
+                    let full_path = format!(
+                        "projects/{}/databases/(default)/documents/{}",
+                        self.service_account.project_id, document_path
+                    );
+                    json!({ "delete": full_path })
+                }
+                TransactionWrite::Update { document_path, fields } => {
+                    let full_path = format!(
+                        "projects/{}/databases/(default)/documents/{}",
+                        self.service_account.project_id, document_path
+                    );
+                    let field_paths: Vec<String> = fields
+                        .as_object()
+                        .map(|obj| obj.keys().cloned().collect())
+                        .unwrap_or_default();
+                    json!({
+                        "update": {
+                            "name": full_path,
+                            "fields": to_firestore_fields(&fields)
+                        },
+                        "updateMask": {
+                            "fieldPaths": field_paths
+                        }
+                    })
+                }
+            })
+            .collect();
+
+        let body = json!({
+            "transaction": transaction_id,
+            "writes": write_objects
+        });
+
+        let response = self
+            .client
+            .post(&url)
+            .bearer_auth(&token)
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            debug!("Firebase commit error: {}", body);
+            return Err(anyhow!("Firebase commit error: {}", status));
+        }
+
+        Ok(())
+    }
+
+    /// Read a document within a transaction context.
+    pub async fn get_document_in_transaction(
+        &self,
+        transaction_id: &str,
+        collection: &str,
+        doc_id: &str,
+    ) -> Result<Option<Value>> {
+        let token = self.get_access_token().await?;
+        let url = format!(
+            "{}/{}/{}?transaction={}",
+            self.base_url(),
+            collection,
+            doc_id,
+            transaction_id
+        );
+
+        let response = self.client.get(&url).bearer_auth(&token).send().await?;
+
+        if response.status() == 404 {
+            return Ok(None);
+        }
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            debug!("Firebase error: {}", body);
+            return Err(anyhow!("Firebase error: {}", status));
+        }
+
+        let doc: Value = response.json().await?;
+        Ok(Some(from_firestore_document(&doc)))
     }
 }
 
