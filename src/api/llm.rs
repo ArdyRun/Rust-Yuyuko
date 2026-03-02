@@ -86,6 +86,83 @@ pub async fn completion_openrouter(
         .ok_or_else(|| anyhow::anyhow!("No choices in OpenRouter response"))
 }
 
+/// Send a chat completion request natively using Gemini API
+pub async fn completion_gemini_chat(
+    data: &Data,
+    system_prompt: &str,
+    messages: Vec<ChatMessage>,
+) -> anyhow::Result<String> {
+    let api_key = std::env::var("GEMINI_API_KEY")?;
+    // Using gemini-flash-latest
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={}",
+        api_key
+    );
+
+    let mut contents = Vec::new();
+    let mut current_role = String::new();
+    let mut current_parts = Vec::new();
+
+    for msg in messages {
+        let role = match msg.role.as_str() {
+            "assistant" => "model",
+            _ => "user",
+        };
+
+        if role == current_role {
+            if !current_parts.is_empty() {
+                // Add separator for consecutive messages of the same role
+                current_parts.push(json!({"text": "\n"}));
+            }
+            current_parts.push(json!({"text": msg.content}));
+        } else {
+            if !current_role.is_empty() {
+                contents.push(json!({
+                    "role": current_role,
+                    "parts": current_parts
+                }));
+            }
+            current_role = role.to_string();
+            current_parts = vec![json!({"text": msg.content})];
+        }
+    }
+
+    if !current_role.is_empty() {
+        contents.push(json!({
+            "role": current_role,
+            "parts": current_parts
+        }));
+    }
+
+    let body = json!({
+        "system_instruction": {
+            "parts": { "text": system_prompt }
+        },
+        "contents": contents,
+        "generationConfig": {
+            "temperature": 0.5,
+            "maxOutputTokens": 2048,
+        }
+    });
+
+    let res = data.http_client.post(&url).json(&body).send().await?;
+
+    if !res.status().is_success() {
+        let error_text = res.text().await?;
+        anyhow::bail!("Gemini Chat API error: {}", error_text);
+    }
+
+    let response: GeminiResponse = res.json().await?;
+
+    response
+        .candidates
+        .as_ref()
+        .and_then(|c| c.first())
+        .and_then(|c| c.content.parts.first())
+        .and_then(|p| p.text.clone())
+        .ok_or_else(|| anyhow::anyhow!("No text in Gemini Chat response"))
+}
+
 /// Send a request to Gemini for multimodal tasks (Translate, etc.) (Placeholder for now)
 pub async fn completion_gemini(data: &Data, prompt: &str) -> anyhow::Result<String> {
     let api_key = std::env::var("GEMINI_API_KEY")?;

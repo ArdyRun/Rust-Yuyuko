@@ -9,7 +9,8 @@ use tokio::sync::Mutex;
 use tracing::{debug, error};
 
 use crate::api::llm::{
-    completion_gemini_vision, completion_openrouter, generate_image, ChatMessage,
+    completion_gemini_chat, completion_gemini_vision, completion_openrouter, generate_image,
+    ChatMessage,
 };
 use crate::features::custom_prompt::get_user_custom_prompt;
 use crate::features::novel_recommender::smart_novel_search;
@@ -441,7 +442,7 @@ pub async fn handle_message(
 
         let full_prompt = format!("{}\n\n{}", system_prompt, user_context);
 
-        response = match completion_openrouter(data, &full_prompt, messages.clone()).await {
+        response = match completion_gemini_chat(data, &full_prompt, messages.clone()).await {
             Ok(res) => res,
             Err(e) => {
                 error!("Ayumi LLM error: {:?}", e);
