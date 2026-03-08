@@ -1,11 +1,17 @@
 use rand::prelude::IndexedRandom;
+use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
-use tracing::{debug, error, info};
+use std::time::Duration;
+use tracing::{debug, error, info, warn};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::api::llm::completion_gemini;
 use crate::Data;
+
+const ANNAS_BASE_URL: &str = "https://annas-archive.li";
+
+// ── Local novel database ──────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Novel {
@@ -18,11 +24,10 @@ pub struct Novel {
 
 static NOVELS: OnceLock<Vec<Novel>> = OnceLock::new();
 
-/// Load novels from JSON file (Lazy loaded)
 pub fn get_novels() -> &'static [Novel] {
     NOVELS.get_or_init(|| {
         let paths = [
-            "Yuyuko/utils/novelList.json",
+            "Ayumi/utils/novelList.json",
             "src/data/novelList.json",
             "data/novelList.json",
         ];
@@ -50,7 +55,107 @@ pub fn get_novels() -> &'static [Novel] {
     })
 }
 
-/// Normalize string for matching (lowercase, no diacritics, no punctuation)
+// ── Anna's Archive integration ────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct AnnaNovelResult {
+    pub title: String,
+    pub author: Option<String>,
+    pub format: Option<String>,
+    pub size: Option<String>,
+    pub url: String,
+}
+
+/// Search Anna's Archive for novels
+async fn search_annas(query: &str) -> Option<Vec<AnnaNovelResult>> {
+    let encoded = urlencoding::encode(query);
+    let url = format!("{}/search?q={}&lang=ja", ANNAS_BASE_URL, encoded);
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .build()
+        .ok()?;
+
+    let resp = client.get(&url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+
+    let html = resp.text().await.ok()?;
+    let document = Html::parse_document(&html);
+    let title_sel = Selector::parse("a.js-vim-focus").ok()?;
+    let author_icon_sel = Selector::parse("span[class*='icon-[mdi--user-edit]']").ok()?;
+
+    let mut results = Vec::new();
+
+    for title_el in document.select(&title_sel) {
+        let href = match title_el.value().attr("href") {
+            Some(h) if h.starts_with("/md5/") => h,
+            _ => continue,
+        };
+
+        let title = title_el.text().collect::<String>().trim().to_string();
+        if title.is_empty() {
+            continue;
+        }
+
+        let full_url = format!("{}{}", ANNAS_BASE_URL, href);
+        let mut author = None;
+        let mut format = None;
+        let mut size = None;
+
+        if let Some(parent) = title_el.parent() {
+            if let Some(gp) = parent.parent() {
+                if let Some(container) = scraper::ElementRef::wrap(gp) {
+                    // Author
+                    for icon in container.select(&author_icon_sel) {
+                        if let Some(p) = icon.parent() {
+                            if let Some(el) = scraper::ElementRef::wrap(p) {
+                                let txt = el.text().collect::<String>().trim().to_string();
+                                if !txt.is_empty() {
+                                    author = Some(txt);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    // Metadata line: "Japanese [ja] · PDF · 86.7MB · 2024"
+                    let all_text = container.text().collect::<String>();
+                    for line in all_text.lines() {
+                        let t = line.trim();
+                        if t.contains(" · ") && (t.contains("Japanese") || t.contains("[ja]")) {
+                            let parts: Vec<&str> = t.split(" · ").collect();
+                            if parts.len() >= 3 {
+                                format = Some(parts[1].trim().to_uppercase());
+                                size = Some(parts[2].trim().to_string());
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        results.push(AnnaNovelResult {
+            title,
+            author,
+            format,
+            size,
+            url: full_url,
+        });
+    }
+
+    if results.is_empty() {
+        None
+    } else {
+        Some(results)
+    }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────
+
 fn normalize_string(s: &str) -> String {
     s.nfd()
         .filter(|c| !c.is_ascii_punctuation() && !matches!(c, '\u{0300}'..='\u{036f}'))
@@ -61,7 +166,6 @@ fn normalize_string(s: &str) -> String {
         .join(" ")
 }
 
-/// Detect JLPT level from user message
 fn detect_jlpt_level(text: &str) -> Option<&'static str> {
     let lower = text.to_lowercase();
 
@@ -80,7 +184,6 @@ fn detect_jlpt_level(text: &str) -> Option<&'static str> {
     }
 }
 
-/// Detect genre from user message
 fn detect_genre(text: &str) -> Option<&'static str> {
     let lower = text.to_lowercase();
 
@@ -119,12 +222,13 @@ fn detect_genre(text: &str) -> Option<&'static str> {
     None
 }
 
-/// Random recommendation (fallback)
+// ── Public API ────────────────────────────────────────────────────
+
+/// Random recommendation from local database (fallback)
 pub fn recommend_novels(count: usize) -> String {
     let novels = get_novels();
     if novels.is_empty() {
-        return "Maaf, aku belum menemukan daftar novelnya... Sepertinya ada yang salah."
-            .to_string();
+        return "Maaf, database novel kosong.".to_string();
     }
 
     let mut rng = rand::rng();
@@ -146,23 +250,18 @@ pub fn recommend_novels(count: usize) -> String {
     response
 }
 
-/// Smart novel search using LLM to get suggestions
+/// Smart novel search — uses Anna's Archive first, then local DB
 pub async fn smart_novel_search(data: &Data, query: &str) -> String {
-    let novels = get_novels();
-    if novels.is_empty() {
-        return "Maaf, database novel belum tersedia.".to_string();
-    }
-
     // Detect JLPT level or genre
     let level = detect_jlpt_level(query);
     let genre = detect_genre(query);
 
     debug!(
-        "Smart novel search - Level: {:?}, Genre: {:?}",
+        "Smart novel search — Level: {:?}, Genre: {:?}",
         level, genre
     );
 
-    // Build LLM prompt based on detected intent
+    // Build LLM prompt for title resolution
     let prompt = if let Some(lvl) = level {
         format!(
             "Suggest 5 popular Japanese light novel titles that are appropriate for {} level learners. Only respond with the titles in Japanese, one per line, no additional text or numbering.",
@@ -174,14 +273,13 @@ pub async fn smart_novel_search(data: &Data, query: &str) -> String {
             g
         )
     } else {
-        // Check if it looks like a title search
         format!(
             "What is the original Japanese title for the light novel or anime '{}'? Only respond with the Japanese title, no additional text.",
             query
         )
     };
 
-    // Call LLM for suggestions
+    // Get LLM suggestions
     let suggested_titles = match completion_gemini(data, &prompt).await {
         Ok(response) => response
             .lines()
@@ -193,13 +291,67 @@ pub async fn smart_novel_search(data: &Data, query: &str) -> String {
             .collect::<Vec<_>>(),
         Err(e) => {
             error!("LLM suggestion failed: {:?}", e);
-            return recommend_novels(5); // Fallback to random
+            return recommend_novels(5);
         }
     };
 
     debug!("LLM suggested titles: {:?}", suggested_titles);
 
-    // Match suggested titles with database
+    // Try Anna's Archive for each suggested title
+    let mut anna_results: Vec<AnnaNovelResult> = Vec::new();
+
+    for title in &suggested_titles {
+        if anna_results.len() >= 10 {
+            break;
+        }
+        match search_annas(title).await {
+            Some(mut results) => {
+                let take = (10 - anna_results.len()).min(results.len());
+                anna_results.extend(results.drain(..take));
+            }
+            None => {
+                debug!("No Anna's Archive results for: {}", title);
+            }
+        }
+    }
+
+    // If Anna's Archive has results, use them
+    if !anna_results.is_empty() {
+        let title_str = if let Some(lvl) = level {
+            format!("**Rekomendasi Novel untuk Level {} (via Anna's Archive):**\n\n", lvl)
+        } else if let Some(g) = genre {
+            format!("**Rekomendasi Novel Genre {} (via Anna's Archive):**\n\n", g)
+        } else {
+            format!("**Hasil Pencarian '{}' (via Anna's Archive):**\n\n", query)
+        };
+
+        let mut response = title_str;
+        for (i, r) in anna_results.iter().enumerate() {
+            let author = r.author.as_deref().unwrap_or("Unknown");
+            let fmt = r.format.as_deref().unwrap_or("?");
+            let sz = r.size.as_deref().unwrap_or("?");
+            response.push_str(&format!(
+                "{}. [{}]({})\n   ✍️ {} | 📄 {} | 💾 {}\n\n",
+                i + 1,
+                r.title,
+                r.url,
+                author,
+                fmt,
+                sz
+            ));
+        }
+        response.push_str("Semoga suka ya! Jangan lupa baca~");
+        return response;
+    }
+
+    // Fallback: search local database
+    warn!("Anna's Archive returned no results, falling back to local DB");
+    let novels = get_novels();
+    if novels.is_empty() {
+        return "Maaf, database novel belum tersedia.".to_string();
+    }
+
+    // Match LLM suggestions against local DB
     let normalized_suggestions: Vec<String> = suggested_titles
         .iter()
         .map(|t| normalize_string(t))
@@ -216,7 +368,7 @@ pub async fn smart_novel_search(data: &Data, query: &str) -> String {
         .take(10)
         .collect();
 
-    // If no matches from LLM, try direct search
+    // Direct search if no LLM match
     if results.is_empty() {
         let norm_query = normalize_string(query);
         results = novels
@@ -226,17 +378,15 @@ pub async fn smart_novel_search(data: &Data, query: &str) -> String {
             .collect();
     }
 
-    // Still no results? Random fallback
     if results.is_empty() {
         return format!(
-            "Tidak ada novel yang cocok dengan pencarian '{}'. Berikut rekomendasi acak:\n\n{}",
+            "Tidak ada novel yang cocok dengan '{}'. Berikut rekomendasi acak:\n\n{}",
             query,
             recommend_novels(5)
         );
     }
 
-    // Build response
-    let title = if level.is_some() {
+    let title_str = if level.is_some() {
         format!("**Rekomendasi Novel untuk Level {}:**\n\n", level.unwrap())
     } else if genre.is_some() {
         format!("**Rekomendasi Novel Genre {}:**\n\n", genre.unwrap())
@@ -244,7 +394,7 @@ pub async fn smart_novel_search(data: &Data, query: &str) -> String {
         format!("**Hasil Pencarian '{}':**\n\n", query)
     };
 
-    let mut response = title;
+    let mut response = title_str;
     for (i, novel) in results.iter().enumerate() {
         response.push_str(&format!(
             "{}. [{}]({})\n   Format: {} | Size: {}\n\n",

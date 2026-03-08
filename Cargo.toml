@@ -1,5 +1,5 @@
 [package]
-name = "yuyuko-rs"
+name = "ayumi-rs"
 version = "0.1.0"
 edition = "2021"
 description = "A lightweight Discord bot for Japanese immersion tracking"
@@ -22,7 +22,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 # HTTP client
 reqwest = { version = "0.11", default-features = false, features = [
     "json",
-    "rustls-tls"
+    "rustls-tls",
+    "cookies"
 ] }
 
 # Serialization
@@ -59,6 +60,8 @@ charts-rs = { version = "0.3.27", features = ["image-encoder"] }
 futures = "0.3"
 unicode-normalization = "0.1.25"
 html-escape = "0.2"
+scraper = "0.22"
+urlencoding = "2"
 
 [profile.release]
 opt-level = "z"     # Optimize for size

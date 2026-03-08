@@ -1,4 +1,4 @@
-// Centralized configuration for Yuyuko Bot
+// Centralized configuration for Ayumi Bot
 
 /// Day offset - day ends at 2:00 AM instead of midnight
 /// Activity at 1:30 AM on Jan 16 will count as Jan 15

@@ -2,6 +2,7 @@
 // Ported from events/afkHandler.js
 
 use poise::serenity_prelude as serenity;
+use tracing::{debug, error, info};
 
 use crate::commands::afk::{get_afk_data, is_afk, remove_afk};
 
@@ -16,8 +17,13 @@ pub async fn handle_afk_message(
     }
 
     // Check if the message author is AFK - remove their status
-    if is_afk(msg.author.id.get()).await {
-        if let Some(_afk_data) = remove_afk(msg.author.id.get()).await {
+    let author_id = msg.author.id.get();
+    if is_afk(author_id).await {
+        info!(
+            "[AFK] User {} ({}) sent a message while AFK, removing status",
+            msg.author.name, author_id
+        );
+        if let Some(_afk_data) = remove_afk(author_id).await {
             let embed = serenity::CreateEmbed::new()
                 .color(0x2ecc71) // Green
                 .author(
@@ -31,7 +37,7 @@ pub async fn handle_afk_message(
                 .description("Status AFK kamu telah dihapus")
                 .timestamp(serenity::Timestamp::now());
 
-            let reply = msg
+            match msg
                 .channel_id
                 .send_message(
                     &ctx.http,
@@ -39,23 +45,39 @@ pub async fn handle_afk_message(
                         .embed(embed)
                         .reference_message(msg),
                 )
-                .await?;
-
-            // Delete the welcome back message after 5 seconds
-            let http = ctx.http.clone();
-            let channel_id = msg.channel_id;
-            let message_id = reply.id;
-
-            tokio::spawn(async move {
-                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                let _ = channel_id.delete_message(&http, message_id).await;
-            });
+                .await
+            {
+                Ok(_reply) => {
+                    info!("[AFK] Sent welcome back message for {}", msg.author.name);
+                }
+                Err(e) => {
+                    error!(
+                        "[AFK] Failed to send welcome back message for {}: {:?}",
+                        msg.author.name, e
+                    );
+                }
+            }
+        } else {
+            debug!(
+                "[AFK] Race condition: AFK already removed for {} ({})",
+                msg.author.name, author_id
+            );
         }
     }
 
     // Check for mentions of AFK users
     for mentioned_user in &msg.mentions {
-        if let Some(afk_data) = get_afk_data(mentioned_user.id.get()).await {
+        // Skip bot mentions
+        if mentioned_user.bot {
+            continue;
+        }
+
+        let mentioned_id = mentioned_user.id.get();
+        if let Some(afk_data) = get_afk_data(mentioned_id).await {
+            debug!(
+                "[AFK] User {} mentioned AFK user {} ({})",
+                msg.author.name, afk_data.username, mentioned_id
+            );
             let embed = serenity::CreateEmbed::new()
                 .color(0xe67e22) // Orange
                 .author(
@@ -69,14 +91,21 @@ pub async fn handle_afk_message(
                 ))
                 .timestamp(serenity::Timestamp::now());
 
-            msg.channel_id
+            if let Err(e) = msg
+                .channel_id
                 .send_message(
                     &ctx.http,
                     serenity::CreateMessage::new()
                         .embed(embed)
                         .reference_message(msg),
                 )
-                .await?;
+                .await
+            {
+                error!(
+                    "[AFK] Failed to send AFK mention notification for {}: {:?}",
+                    afk_data.username, e
+                );
+            }
         }
     }
 

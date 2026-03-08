@@ -14,3 +14,7 @@ deploy_fast.sh
 askpass.sh
 deploy.py
 deploy.tar.gz
+
+# Local testing and ops scripts
+stop_vps.py
+test_models.py

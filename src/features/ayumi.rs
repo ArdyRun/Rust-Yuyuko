@@ -9,7 +9,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, error};
 
 use crate::api::llm::{
-    completion_gemini_chat, completion_gemini_vision, completion_openrouter, generate_image,
+    completion_chat_with_fallback, completion_gemini_vision, generate_image,
     ChatMessage,
 };
 use crate::features::custom_prompt::get_user_custom_prompt;
@@ -442,10 +442,10 @@ pub async fn handle_message(
 
         let full_prompt = format!("{}\n\n{}", system_prompt, user_context);
 
-        response = match completion_gemini_chat(data, &full_prompt, messages.clone()).await {
+        response = match completion_chat_with_fallback(data, &full_prompt, messages.clone()).await {
             Ok(res) => res,
             Err(e) => {
-                error!("Ayumi LLM error: {:?}", e);
+                error!("Ayumi chat error: {:?}", e);
                 "Maaf, Ayumi lagi pusing... Coba lagi nanti ya.".to_string()
             }
         };

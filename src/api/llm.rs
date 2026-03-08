@@ -8,15 +8,20 @@ pub struct ChatMessage {
     pub content: String,
 }
 
+/// Shared response struct for all OpenAI-compatible providers (OpenRouter, AgentRouter, etc.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OpenRouterResponse {
-    pub choices: Vec<OpenRouterChoice>,
+pub struct OpenAIResponse {
+    pub choices: Vec<OpenAIChoice>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OpenRouterChoice {
+pub struct OpenAIChoice {
     pub message: ChatMessage,
 }
+
+// Backward-compat aliases
+type OpenRouterResponse = OpenAIResponse;
+type OpenRouterChoice = OpenAIChoice;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeminiResponse {
@@ -67,7 +72,7 @@ pub async fn completion_openrouter(
         .post("https://openrouter.ai/api/v1/chat/completions")
         .header("Authorization", format!("Bearer {}", api_key))
         .header("HTTP-Referer", "https://discord.com") // Required by OpenRouter
-        .header("X-Title", "Yuyuko Bot")
+        .header("X-Title", "Ayumi Bot")
         .json(&body)
         .send()
         .await?;
@@ -77,13 +82,75 @@ pub async fn completion_openrouter(
         anyhow::bail!("OpenRouter API error: {}", error_text);
     }
 
-    let response: OpenRouterResponse = res.json().await?;
+    let response: OpenAIResponse = res.json().await?;
 
     response
         .choices
         .first()
         .map(|c| c.message.content.clone())
         .ok_or_else(|| anyhow::anyhow!("No choices in OpenRouter response"))
+}
+
+/// Primary chat: Gemini Flash Latest → fallback to OpenRouter if rate-limited.
+pub async fn completion_chat_with_fallback(
+    data: &Data,
+    system_prompt: &str,
+    messages: Vec<ChatMessage>,
+) -> anyhow::Result<String> {
+    // --- Primary: Gemini Flash Latest ---
+    match completion_gemini_chat(data, system_prompt, messages.clone()).await {
+        Ok(text) => return Ok(text),
+        Err(e) => {
+            let err_str = format!("{:?}", e);
+            // Only fallback on rate limit (429) or server errors (5xx)
+            if err_str.contains("429") || err_str.contains("500") || err_str.contains("503") || err_str.contains("RESOURCE_EXHAUSTED") {
+                tracing::warn!("Gemini rate-limited, falling back to OpenRouter: {}", err_str);
+            } else {
+                // Non-rate-limit error — still fallback but log as error
+                tracing::error!("Gemini chat error (falling back to OpenRouter): {}", err_str);
+            }
+        }
+    }
+
+    // --- Fallback: OpenRouter ---
+    let openrouter_key = std::env::var("OPENROUTER_API_KEY")
+        .map_err(|_| anyhow::anyhow!("OPENROUTER_API_KEY is not set for fallback"))?;
+
+    let mut all_messages = vec![ChatMessage {
+        role: "system".to_string(),
+        content: system_prompt.to_string(),
+    }];
+    all_messages.extend(messages);
+
+    let body = json!({
+        "model": "openrouter/free",
+        "messages": all_messages,
+        "max_tokens": 2048,
+        "temperature": 0.5,
+    });
+
+    let res = data
+        .http_client
+        .post("https://openrouter.ai/api/v1/chat/completions")
+        .header("Authorization", format!("Bearer {}", openrouter_key))
+        .header("Content-Type", "application/json")
+        .header("HTTP-Referer", "https://discord.com")
+        .header("X-Title", "Ayumi Bot")
+        .json(&body)
+        .send()
+        .await?;
+
+    if !res.status().is_success() {
+        let error_text = res.text().await?;
+        anyhow::bail!("OpenRouter fallback error: {}", error_text);
+    }
+
+    let response: OpenAIResponse = res.json().await?;
+    response
+        .choices
+        .first()
+        .map(|c| c.message.content.clone())
+        .ok_or_else(|| anyhow::anyhow!("No choices in OpenRouter fallback response"))
 }
 
 /// Send a chat completion request natively using Gemini API

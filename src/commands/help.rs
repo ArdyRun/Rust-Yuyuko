@@ -8,7 +8,7 @@ use poise::serenity_prelude as serenity;
 #[poise::command(slash_command, prefix_command)]
 pub async fn help(ctx: Context<'_>) -> Result<(), Error> {
     let embed = serenity::CreateEmbed::new()
-        .title("Yuyuko Bot - Help")
+        .title("Ayumi Bot - Help")
         .description("A lightweight Japanese immersion tracker")
         .color(colors::PRIMARY)
         .field(

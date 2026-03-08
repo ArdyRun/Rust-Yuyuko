@@ -1,4 +1,4 @@
-// Yuyuko Bot - Rust Edition
+// Ayumi Bot - Rust Edition
 // A lightweight Discord bot for Japanese immersion tracking
 
 mod api;
@@ -66,7 +66,7 @@ async fn main() {
     // Initialize logging
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
-            env::var("RUST_LOG").unwrap_or_else(|_| "yuyuko_rs=info".into()),
+            env::var("RUST_LOG").unwrap_or_else(|_| "ayumi_rs=info".into()),
         ))
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -76,14 +76,14 @@ async fn main() {
 
     let token = env::var("DISCORD_TOKEN").expect("DISCORD_TOKEN must be set");
     let _firebase_project_id =
-        env::var("FIREBASE_PROJECT_ID").unwrap_or_else(|_| "yuyuko-bot".to_string());
+        env::var("FIREBASE_PROJECT_ID").unwrap_or_else(|_| "ayumi-bot".to_string());
     let owner_id = env::var("BOT_OWNER_ID").ok();
 
-    info!("Starting Yuyuko Bot (Rust Edition)...");
+    info!("Starting Ayumi Bot (Rust Edition)...");
 
     // Build HTTP client for API calls
     let http_client = reqwest::Client::builder()
-        .user_agent("Yuyuko-Bot/1.0")
+        .user_agent("Ayumi-Bot/1.0")
         .build()
         .expect("Failed to create HTTP client");
 

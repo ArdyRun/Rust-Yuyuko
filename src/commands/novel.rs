@@ -1,16 +1,144 @@
-// Novel search command - search and download light novels
-// Ported from commands/downNovel.js
+// Novel search command — search via Anna's Archive, direct download via Libgen.li
+// Download links: libgen.li/get.php?md5={md5} — no session/timer needed, instant redirect
 
+use futures::StreamExt;
 use once_cell::sync::Lazy;
 use poise::serenity_prelude as serenity;
+use scraper::{Html, Selector};
 use serde::Deserialize;
 use std::time::Duration;
-use tracing::{error, info};
+use tracing::{info, warn};
 
 use crate::utils::config::colors;
 use crate::{Context, Error};
 
-/// Novel entry from novelList.json
+const ANNAS_BASE_URL: &str = "https://annas-archive.li";
+const LIBGEN_BASE: &str = "https://libgen.li";
+const PAGE_SIZE: usize = 10;
+
+// ── Structs ───────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct AnnaResult {
+    pub title: String,
+    pub author: Option<String>,
+    pub format: Option<String>,
+    pub size: Option<String>,
+    pub detail_url: String,
+    /// Direct download via Libgen mirror — constructed from md5, no extra request
+    pub download_url: String,
+}
+
+// ── Search ────────────────────────────────────────────────────────
+
+pub async fn search_annas_archive(
+    query: &str,
+) -> Result<Vec<AnnaResult>, Box<dyn std::error::Error + Send + Sync>> {
+    let encoded = urlencoding::encode(query);
+    let url = format!("{}/search?q={}&lang=ja&ext=epub", ANNAS_BASE_URL, encoded);
+    info!("Searching Anna's Archive: {}", url);
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .build()?;
+
+    let resp = client.get(&url).send().await?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()).into());
+    }
+    parse_search_results(&resp.text().await?)
+}
+
+fn parse_search_results(
+    html: &str,
+) -> Result<Vec<AnnaResult>, Box<dyn std::error::Error + Send + Sync>> {
+    let doc = Html::parse_document(html);
+    let title_sel = Selector::parse("a.js-vim-focus").unwrap();
+    let icon_sel = Selector::parse("span[class*='icon-[mdi--user-edit]']").unwrap();
+
+    let mut results = Vec::new();
+
+    for title_el in doc.select(&title_sel) {
+        let href = match title_el.value().attr("href") {
+            Some(h) if h.starts_with("/md5/") => h,
+            _ => continue,
+        };
+
+        let md5 = href.trim_start_matches("/md5/").to_string();
+        let title = title_el.text().collect::<String>().trim().to_string();
+        if title.is_empty() || md5.is_empty() {
+            continue;
+        }
+
+        let detail_url = format!("{}{}", ANNAS_BASE_URL, href);
+        let mut author = None;
+        let mut format = None;
+        let mut size = None;
+
+        // Walk up to the result card container
+        if let Some(parent) = title_el.parent() {
+            if let Some(gp) = parent.parent() {
+                if let Some(container) = scraper::ElementRef::wrap(gp) {
+                    // Author
+                    for icon in container.select(&icon_sel) {
+                        if let Some(p) = icon.parent() {
+                            if let Some(el) = scraper::ElementRef::wrap(p) {
+                                let txt = el.text().collect::<String>().trim().to_string();
+                                if !txt.is_empty() {
+                                    author = Some(txt);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    // Metadata line: "Japanese [ja] · PDF · 86.7MB · 2024"
+                    for line in container.text().collect::<String>().lines() {
+                        let t = line.trim();
+                        if t.contains(" · ")
+                            && (t.contains("Japanese") || t.contains("[ja]"))
+                        {
+                            let parts: Vec<&str> = t.split(" · ").collect();
+                            if parts.len() >= 3 {
+                                format = Some(parts[1].trim().to_uppercase());
+                                size = Some(parts[2].trim().to_string());
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Only include epub and pdf
+        let is_valid = format
+            .as_deref()
+            .map(|f| f == "EPUB" || f == "PDF")
+            .unwrap_or(false);
+        if !is_valid {
+            continue;
+        }
+
+        // Direct download URL via Libgen — no extra request needed
+        let download_url = format!("{}/get.php?md5={}", LIBGEN_BASE, md5);
+
+        results.push(AnnaResult {
+            title,
+            author,
+            format,
+            size,
+            detail_url,
+            download_url,
+        });
+    }
+
+    info!("Parsed {} results (epub/pdf only)", results.len());
+    Ok(results)
+}
+
+// ── Local fallback: novelList.json ────────────────────────────────
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct NovelEntry {
     #[allow(dead_code)]
@@ -21,209 +149,166 @@ pub struct NovelEntry {
     pub format: String,
 }
 
-/// Global novel database (loaded once at startup)
 static NOVELS: Lazy<Vec<NovelEntry>> = Lazy::new(|| {
-    load_novels().unwrap_or_else(|e| {
-        error!("Failed to load novel database: {:?}", e);
-        Vec::new()
-    })
-});
-
-/// Load novels from JSON file
-fn load_novels() -> Result<Vec<NovelEntry>, Box<dyn std::error::Error + Send + Sync>> {
-    // Log current working directory for debugging
-    if let Ok(cwd) = std::env::current_dir() {
-        info!(
-            "Novel loader - Current working directory: {}",
-            cwd.display()
-        );
-    }
-
-    // Try multiple possible paths
     let paths = [
-        "Yuyuko/utils/novelList.json",
+        "Ayumi/utils/novelList.json",
         "src/data/novelList.json",
         "data/novelList.json",
-        "./Yuyuko/utils/novelList.json",
-        "./src/data/novelList.json",
-        "./data/novelList.json",
     ];
-
-    let mut tried_paths = Vec::new();
-
     for path in paths {
-        tried_paths.push(path);
-
-        match std::fs::read_to_string(path) {
-            Ok(content) => match serde_json::from_str::<Vec<NovelEntry>>(&content) {
-                Ok(novels) => {
-                    info!(
-                        "✓ Successfully loaded {} novels from {}",
-                        novels.len(),
-                        path
-                    );
-                    return Ok(novels);
-                }
-                Err(e) => {
-                    error!("✗ Found file at {} but failed to parse JSON: {:?}", path, e);
-                }
-            },
-            Err(_) => {
-                // File not found at this path, continue to next
+        if let Ok(content) = std::fs::read_to_string(path) {
+            if let Ok(novels) = serde_json::from_str::<Vec<NovelEntry>>(&content) {
+                info!("Loaded {} local novels from {}", novels.len(), path);
+                return novels;
             }
         }
     }
+    warn!("novelList.json not found — local fallback unavailable");
+    Vec::new()
+});
 
-    // If all paths failed, log detailed error
-    error!("Failed to load novelList.json. Tried paths:");
-    for path in &tried_paths {
-        error!("  - {}", path);
-    }
-
-    Err(format!(
-        "Could not find novelList.json in any of these locations: {}",
-        tried_paths.join(", ")
-    )
-    .into())
+fn search_local(query: &str) -> Vec<AnnaResult> {
+    let q = query.to_lowercase();
+    NOVELS
+        .iter()
+        .filter(|n| n.title.to_lowercase().contains(&q))
+        .map(|n| AnnaResult {
+            title: n.title.clone(),
+            author: None,
+            format: Some(n.format.clone()),
+            size: Some(n.size.clone()),
+            detail_url: n.url.clone(),
+            download_url: n.url.clone(), // Mega link is already direct
+        })
+        .collect()
 }
 
-const PAGE_SIZE: usize = 10;
+// ── Slash command ─────────────────────────────────────────────────
 
-/// Search and download light novels
+/// Cari dan download light novel via Anna's Archive
 #[poise::command(slash_command, prefix_command)]
 pub async fn novel(
     ctx: Context<'_>,
     #[description = "Judul light novel (kanji/kana/romaji)"] title: String,
 ) -> Result<(), Error> {
-    info!(
-        "Novel command executed by user {} with query: {}",
-        ctx.author().id,
-        title
-    );
+    info!("Novel command by {} — query: {}", ctx.author().id, title);
     ctx.defer().await?;
 
-    // Check if novels loaded
-    if NOVELS.is_empty() {
-        error!("Novel database is empty - novelList.json was not loaded successfully");
-        ctx.say("Maaf, database novel belum bisa dimuat. Hubungi admin untuk cek log bot ya!")
-            .await?;
-        return Ok(());
-    }
+    let (results, source) = match search_annas_archive(&title).await {
+        Ok(r) if !r.is_empty() => (r, "Anna's Archive"),
+        Ok(_) => {
+            let local = search_local(&title);
+            if local.is_empty() {
+                ctx.say("Tidak ditemukan novel dengan judul tersebut.").await?;
+                return Ok(());
+            }
+            (local, "Local Database")
+        }
+        Err(e) => {
+            warn!("Anna's Archive error: {:?}", e);
+            let local = search_local(&title);
+            if local.is_empty() {
+                ctx.say("Anna's Archive tidak dapat dijangkau dan tidak ada hasil di database lokal.")
+                    .await?;
+                return Ok(());
+            }
+            (local, "Local Database")
+        }
+    };
 
-    info!("Searching {} novels for query: {}", NOVELS.len(), title);
-
-    // Search novels
-    let query = title.to_lowercase();
-    let results: Vec<&NovelEntry> = NOVELS
-        .iter()
-        .filter(|n| n.title.to_lowercase().contains(&query))
-        .collect();
-
-    if results.is_empty() {
-        ctx.say("Tidak ditemukan novel dengan judul tersebut.")
-            .await?;
-        return Ok(());
-    }
-
-    let total_results = results.len();
-    let total_pages = (total_results + PAGE_SIZE - 1) / PAGE_SIZE;
-
-    // Create initial embed and buttons
-    let embed = create_embed(&results, 0, total_results);
-    let components = create_buttons(0, total_pages);
+    let total = results.len();
+    let total_pages = (total + PAGE_SIZE - 1) / PAGE_SIZE;
 
     let reply = ctx
         .send(
             poise::CreateReply::default()
-                .embed(embed)
-                .components(components),
+                .embed(build_embed(&results, 0, total, source))
+                .components(nav_buttons(0, total_pages)),
         )
         .await?;
 
-    // Handle button interactions
+    // Pagination — no async work during button handling, so interactions complete instantly
     let msg = reply.message().await?;
     let mut current_page: usize = 0;
 
-    // Create collector for button interactions
     let mut collector = msg
         .await_component_interactions(ctx)
         .author_id(ctx.author().id)
-        .timeout(Duration::from_secs(60))
+        .timeout(Duration::from_secs(120))
         .stream();
 
-    use futures::StreamExt;
     while let Some(interaction) = collector.next().await {
         match interaction.data.custom_id.as_str() {
-            "novel_prev" => {
-                if current_page > 0 {
-                    current_page -= 1;
-                }
-            }
-            "novel_next" => {
-                if current_page < total_pages - 1 {
-                    current_page += 1;
-                }
-            }
+            "novel_prev" if current_page > 0 => current_page -= 1,
+            "novel_next" if current_page < total_pages - 1 => current_page += 1,
             _ => continue,
         }
-
-        let new_embed = create_embed(&results, current_page, total_results);
-        let new_components = create_buttons(current_page, total_pages);
 
         interaction
             .create_response(
                 ctx,
                 serenity::CreateInteractionResponse::UpdateMessage(
                     serenity::CreateInteractionResponseMessage::new()
-                        .embed(new_embed)
-                        .components(new_components),
+                        .embed(build_embed(&results, current_page, total, source))
+                        .components(nav_buttons(current_page, total_pages)),
                 ),
             )
             .await?;
     }
 
-    // Disable buttons after timeout - update the original reply
-    let disabled_components = create_disabled_buttons();
+    // Disable buttons on timeout
     let _ = reply
         .edit(
             ctx,
             poise::CreateReply::default()
-                .embed(create_embed(&results, current_page, total_results))
-                .components(disabled_components),
+                .embed(build_embed(&results, current_page, total, source))
+                .components(disabled_buttons()),
         )
         .await;
 
     Ok(())
 }
 
-/// Create embed for current page
-fn create_embed(results: &[&NovelEntry], page: usize, total: usize) -> serenity::CreateEmbed {
+// ── Embed & buttons ───────────────────────────────────────────────
+
+fn build_embed(
+    results: &[AnnaResult],
+    page: usize,
+    total: usize,
+    source: &str,
+) -> serenity::CreateEmbed {
     let start = page * PAGE_SIZE;
     let end = (start + PAGE_SIZE).min(results.len());
-    let current_results = &results[start..end];
 
-    let description = current_results
+    let description = results[start..end]
         .iter()
         .enumerate()
-        .map(|(i, novel)| {
+        .map(|(i, r)| {
+            let author = r.author.as_deref().unwrap_or("Unknown");
+            let fmt = r.format.as_deref().unwrap_or("?");
+            let sz = r.size.as_deref().unwrap_or("?");
+
             format!(
-                "**{}.** [{}]({})\nSize: {} • Format: {}",
+                "**{}.** [Download]({}) | [Detail]({})\n{}\nAuthor: {} | Format: {} | Size: {}",
                 start + i + 1,
-                truncate_title(&novel.title, 60),
-                novel.url,
-                novel.size,
-                novel.format
+                r.download_url,
+                r.detail_url,
+                truncate(&r.title, 60),
+                author,
+                fmt,
+                sz,
             )
         })
         .collect::<Vec<_>>()
         .join("\n\n");
 
     serenity::CreateEmbed::new()
-        .title("Hasil Pencarian Light Novel")
+        .title("Light Novel Search")
         .description(description)
         .color(colors::INFO)
         .footer(serenity::CreateEmbedFooter::new(format!(
-            "Menampilkan {}-{} dari {}",
+            "Source: {} | {}-{} of {}",
+            source,
             start + 1,
             end,
             total
@@ -231,38 +316,35 @@ fn create_embed(results: &[&NovelEntry], page: usize, total: usize) -> serenity:
         .timestamp(serenity::Timestamp::now())
 }
 
-/// Truncate title if too long
-fn truncate_title(title: &str, max_len: usize) -> String {
-    if title.chars().count() <= max_len {
-        title.to_string()
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
     } else {
-        format!("{}...", title.chars().take(max_len - 3).collect::<String>())
+        format!("{}...", s.chars().take(max - 3).collect::<String>())
     }
 }
 
-/// Create navigation buttons
-fn create_buttons(current_page: usize, total_pages: usize) -> Vec<serenity::CreateActionRow> {
+fn nav_buttons(page: usize, total_pages: usize) -> Vec<serenity::CreateActionRow> {
     vec![serenity::CreateActionRow::Buttons(vec![
         serenity::CreateButton::new("novel_prev")
-            .label("⬅️ Prev")
+            .label("< Prev")
             .style(serenity::ButtonStyle::Secondary)
-            .disabled(current_page == 0),
+            .disabled(page == 0),
         serenity::CreateButton::new("novel_next")
-            .label("Next ➡️")
+            .label("Next >")
             .style(serenity::ButtonStyle::Primary)
-            .disabled(current_page >= total_pages - 1),
+            .disabled(page >= total_pages - 1),
     ])]
 }
 
-/// Create disabled buttons (after timeout)
-fn create_disabled_buttons() -> Vec<serenity::CreateActionRow> {
+fn disabled_buttons() -> Vec<serenity::CreateActionRow> {
     vec![serenity::CreateActionRow::Buttons(vec![
         serenity::CreateButton::new("novel_prev")
-            .label("⬅️ Prev")
+            .label("< Prev")
             .style(serenity::ButtonStyle::Secondary)
             .disabled(true),
         serenity::CreateButton::new("novel_next")
-            .label("Next ➡️")
+            .label("Next >")
             .style(serenity::ButtonStyle::Primary)
             .disabled(true),
     ])]
