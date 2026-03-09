@@ -112,6 +112,7 @@ async fn main() {
             },
             prefix_options: poise::PrefixFrameworkOptions {
                 prefix: Some("y!".into()),
+                mention_as_prefix: false,
                 ..Default::default()
             },
             on_error: |error| {

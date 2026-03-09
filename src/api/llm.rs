@@ -20,7 +20,9 @@ pub struct OpenAIChoice {
 }
 
 // Backward-compat aliases
+#[allow(dead_code)]
 type OpenRouterResponse = OpenAIResponse;
+#[allow(dead_code)]
 type OpenRouterChoice = OpenAIChoice;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +46,7 @@ pub struct GeminiPart {
 }
 
 /// Send a chat completion request to OpenRouter (Ayumi's brain)
+#[allow(dead_code)]
 pub async fn completion_openrouter(
     data: &Data,
     system_prompt: &str,
@@ -264,71 +267,125 @@ pub async fn completion_gemini(data: &Data, prompt: &str) -> anyhow::Result<Stri
         .ok_or_else(|| anyhow::anyhow!("No text in Gemini response"))
 }
 
-/// Send a multimodal request (Image + Text) to Gemini
+/// Send a multimodal request (Image + Text) to Gemini, with OpenRouter fallback
+#[allow(dead_code)]
 pub async fn completion_gemini_vision(
     data: &Data,
     prompt: &str,
     image_data: &[u8],
     mime_type: &str,
 ) -> anyhow::Result<String> {
-    let api_key = std::env::var("GEMINI_API_KEY")?;
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={}",
-        api_key
-    );
-
     use base64::{engine::general_purpose, Engine as _};
     let base64_image = general_purpose::STANDARD.encode(image_data);
 
-    let body = json!({
-        "contents": [{
-            "parts": [
-                { "text": prompt },
-                {
-                    "inline_data": {
-                        "mime_type": mime_type,
-                        "data": base64_image
+    // --- Primary: Gemini 2.0 Flash ---
+    if let Ok(api_key) = std::env::var("GEMINI_API_KEY") {
+        let url = format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={}",
+            api_key
+        );
+
+        let body = json!({
+            "contents": [{
+                "parts": [
+                    { "text": prompt },
+                    {
+                        "inline_data": {
+                            "mime_type": mime_type,
+                            "data": base64_image
+                        }
                     }
+                ]
+            }]
+        });
+
+        match data.http_client.post(&url).json(&body).send().await {
+            Ok(res) if res.status().is_success() => {
+                let response: GeminiResponse = res.json().await?;
+                if let Some(text) = response
+                    .candidates
+                    .as_ref()
+                    .and_then(|c| c.first())
+                    .and_then(|c| c.content.parts.first())
+                    .and_then(|p| p.text.clone())
+                {
+                    return Ok(text);
                 }
+            }
+            Ok(res) => {
+                let status = res.status();
+                let err_text = res.text().await.unwrap_or_default();
+                tracing::warn!("Gemini Vision failed ({}), falling back to OpenRouter: {}", status, err_text);
+            }
+            Err(e) => {
+                tracing::warn!("Gemini Vision request error, falling back to OpenRouter: {:?}", e);
+            }
+        }
+    }
+
+    // --- Fallback: OpenRouter free vision model ---
+    let openrouter_key = std::env::var("OPENROUTER_API_KEY")
+        .map_err(|_| anyhow::anyhow!("OPENROUTER_API_KEY not set for vision fallback"))?;
+
+    let data_uri = format!("data:{};base64,{}", mime_type, base64_image);
+
+    let body = json!({
+        "model": "openrouter/free",
+        "messages": [{
+            "role": "user",
+            "content": [
+                { "type": "text", "text": prompt },
+                { "type": "image_url", "image_url": { "url": data_uri } }
             ]
-        }]
+        }],
+        "max_tokens": 2048,
     });
 
-    let res = data.http_client.post(&url).json(&body).send().await?;
+    let res = data
+        .http_client
+        .post("https://openrouter.ai/api/v1/chat/completions")
+        .header("Authorization", format!("Bearer {}", openrouter_key))
+        .header("Content-Type", "application/json")
+        .header("HTTP-Referer", "https://discord.com")
+        .header("X-Title", "Ayumi Bot")
+        .json(&body)
+        .send()
+        .await?;
 
     if !res.status().is_success() {
         let error_text = res.text().await?;
-        anyhow::bail!("Gemini Vision API error: {}", error_text);
+        anyhow::bail!("OpenRouter Vision fallback error: {}", error_text);
     }
 
-    let response: GeminiResponse = res.json().await?;
-
+    let response: OpenAIResponse = res.json().await?;
     response
-        .candidates
-        .as_ref()
-        .and_then(|c| c.first())
-        .and_then(|c| c.content.parts.first())
-        .and_then(|p| p.text.clone())
-        .ok_or_else(|| anyhow::anyhow!("No text in Gemini Vision response"))
+        .choices
+        .first()
+        .map(|c| c.message.content.clone())
+        .ok_or_else(|| anyhow::anyhow!("No choices in OpenRouter Vision fallback response"))
 }
 
 /// Response structures for image generation
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct ImageGenResponse {
     pub candidates: Option<Vec<ImageGenCandidate>>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct ImageGenCandidate {
     pub content: ImageGenContent,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct ImageGenContent {
     pub parts: Vec<ImageGenPart>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageGenPart {
     pub text: Option<String>,
@@ -336,6 +393,7 @@ pub struct ImageGenPart {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageInlineData {
     pub mime_type: String,
@@ -343,14 +401,16 @@ pub struct ImageInlineData {
 }
 
 /// Result of image generation
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ImageGenerationResult {
     pub image_data: Vec<u8>,
     pub mime_type: String,
-    #[allow(dead_code)]
     pub text: Option<String>,
 }
 
 /// Generate an image using Gemini's image generation model
+#[allow(dead_code)]
 pub async fn generate_image(data: &Data, prompt: &str) -> anyhow::Result<ImageGenerationResult> {
     let api_key = std::env::var("GEMINI_API_KEY")?;
 

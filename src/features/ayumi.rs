@@ -9,9 +9,10 @@ use tokio::sync::Mutex;
 use tracing::{debug, error};
 
 use crate::api::llm::{
-    completion_chat_with_fallback, completion_gemini_vision, generate_image,
+    completion_chat_with_fallback,
     ChatMessage,
 };
+use crate::api::ocr;
 use crate::features::custom_prompt::get_user_custom_prompt;
 use crate::features::novel_recommender::smart_novel_search;
 use crate::models::guild::GuildConfig;
@@ -64,6 +65,7 @@ static USER_DATA: Lazy<Arc<Mutex<UserCache>>> = Lazy::new(|| Arc::new(Mutex::new
 
 // ============ Detection Functions ============
 
+#[allow(dead_code)]
 fn detect_image_generation(text: &str) -> bool {
     let keywords = [
         "buatkan gambar",
@@ -211,30 +213,50 @@ pub async fn handle_message(
         None => return Ok(()),
     };
 
-    // Get guild config
-    let config = if let Some(cached) = data.guild_configs.get(&guild_id) {
-        cached.clone()
+    // Determine trigger mode: ayumi channel (free chat) vs other channels (direct @mention only)
+    let bot_id = ctx.cache.current_user().id;
+
+    // Get guild config for ayumi_channel_id
+    let ayumi_channel_id = {
+        let config = if let Some(cached) = data.guild_configs.get(&guild_id) {
+            cached.clone()
+        } else {
+            match data.firebase.get_document("guilds", &guild_id).await {
+                Ok(Some(doc)) => {
+                    let cfg = serde_json::from_value::<GuildConfig>(doc).unwrap_or_default();
+                    data.guild_configs.insert(guild_id.clone(), cfg.clone());
+                    cfg
+                }
+                _ => GuildConfig::default(),
+            }
+        };
+        config.ayumi_channel_id
+    };
+
+    let in_ayumi_channel = ayumi_channel_id
+        .as_ref()
+        .map_or(false, |id| msg.channel_id.to_string() == *id);
+
+    let clean_content = if in_ayumi_channel {
+        // Ayumi channel: free chat, use message as-is
+        msg.content.clone()
     } else {
-        match data.firebase.get_document("guilds", &guild_id).await {
-            Ok(Some(doc)) => {
-                let cfg = serde_json::from_value::<GuildConfig>(doc).unwrap_or_default();
-                data.guild_configs.insert(guild_id.clone(), cfg.clone());
-                cfg
-            }
-            Ok(None) => return Ok(()),
-            Err(e) => {
-                error!("Failed to fetch guild config for {}: {:?}", guild_id, e);
-                return Ok(());
-            }
+        // Other channels: require direct @mention only
+        let has_direct_mention = msg.mentions.iter().any(|u| u.id == bot_id);
+        // Block: no mention, @everyone/@here, or reply to bot's own message (auto-mention)
+        let is_reply_to_bot = msg.referenced_message.as_ref().map_or(false, |r| r.author.id == bot_id);
+        if !has_direct_mention || msg.mention_everyone || is_reply_to_bot {
+            return Ok(());
         }
+        // Strip mention tag
+        msg.content
+            .replace(&format!("<@{}>", bot_id), "")
+            .replace(&format!("<@!{}>", bot_id), "")
+            .trim()
+            .to_string()
     };
 
-    let ayumi_channel = match config.ayumi_channel_id {
-        Some(id) => id,
-        None => return Ok(()),
-    };
-
-    if msg.channel_id.to_string() != ayumi_channel {
+    if clean_content.is_empty() {
         return Ok(());
     }
 
@@ -272,7 +294,7 @@ pub async fn handle_message(
     let mut messages = history_clone;
     messages.push(ChatMessage {
         role: "user".to_string(),
-        content: msg.content.clone(),
+        content: clean_content.clone(),
     });
 
     // Check for image attachment
@@ -285,7 +307,7 @@ pub async fn handle_message(
     let response: String;
 
     if let Some(att) = attachment {
-        debug!("Processing image attachment for user {}", user_name);
+        debug!("Processing image attachment via owocr for user {}", user_name);
 
         let image_data = match att.download().await {
             Ok(d) => d,
@@ -296,89 +318,112 @@ pub async fn handle_message(
             }
         };
 
-        let prompt = if msg.content.trim().is_empty() {
-            "Deskripsikan gambar ini dengan gaya bahasa Ayumi."
+        let user_question = if clean_content.trim().is_empty() {
+            "Apa yang tertulis di gambar ini?".to_string()
         } else {
-            &msg.content
+            clean_content.clone()
         };
 
         let mime_type = att.content_type.as_deref().unwrap_or("image/jpeg");
 
-        response = match completion_gemini_vision(data, prompt, &image_data, mime_type).await {
+        // Use owocr to detect text in the image
+        let ocr_result = match ocr::ocr_image(&image_data, mime_type).await {
+            Ok(text) => text,
+            Err(e) => {
+                debug!("OCR error: {:?}", e);
+                "Tidak ada teks terdeteksi di gambar.".to_string()
+            }
+        };
+
+        // Feed OCR results + user question to text LLM for natural response
+        let image_context = format!(
+            "User mengirim gambar dan bertanya: \"{}\"\n\nTeks yang terdeteksi dari gambar (OCR):\n{}\n\nBantu jawab berdasarkan teks yang terdeteksi.",
+            user_question, ocr_result
+        );
+
+        messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: image_context,
+        });
+
+        let system_prompt = get_user_custom_prompt(msg.author.id.get())
+            .unwrap_or_else(|| AYUMI_SYSTEM_PROMPT.to_string());
+
+        response = match completion_chat_with_fallback(data, &system_prompt, messages.clone()).await {
             Ok(res) => res,
             Err(e) => {
-                error!("Ayumi Gemini Vision error: {:?}", e);
-                "Maaf, mataku agak buram... Gak bisa liat gambarnya jelas.".to_string()
+                error!("Ayumi image chat error: {:?}", e);
+                "Maaf, Ayumi gak bisa baca teks di gambarnya...".to_string()
             }
         };
-    } else if detect_image_generation(&msg.content) {
-        debug!("Processing image generation for user {}", user_name);
-
-        let generating_msg = msg
-            .reply(
-                ctx,
-                format!(
-                    "{}, Ayumi lagi bikin gambar sesuai request kamu nih! Tunggu sebentar ya...",
-                    user_name
-                ),
-            )
-            .await?;
-
-        match generate_image(data, &msg.content).await {
-            Ok(result) => {
-                let _ = generating_msg.delete(ctx).await;
-                let extension = if result.mime_type.contains("png") {
-                    "png"
-                } else {
-                    "jpg"
-                };
-                let filename = format!(
-                    "ayumi_generated_{}.{}",
-                    chrono::Utc::now().timestamp(),
-                    extension
-                );
-
-                let attachment = serenity::CreateAttachment::bytes(result.image_data, filename);
-                let reply_content = format!(
-                    "{}, nih gambar yang Ayumi buatin! Gimana, sesuai ekspektasi gak?",
-                    user_name
-                );
-
-                msg.channel_id
-                    .send_message(
-                        ctx,
-                        serenity::CreateMessage::new()
-                            .content(&reply_content)
-                            .add_file(attachment),
-                    )
-                    .await?;
-
-                response = reply_content;
-            }
-            Err(e) => {
-                error!("Image generation failed: {:?}", e);
-                let _ = generating_msg.delete(ctx).await;
-                response = format!(
-                    "{}, maaf nih Ayumi lagi gabisa bikin gambar. Coba lagi nanti ya",
-                    user_name
-                );
-                msg.reply(ctx, &response).await?;
-            }
-        };
-
-        // Update history and return
-        {
-            let mut cache = CONVERSATION_HISTORY.lock().await;
-            messages.push(ChatMessage {
-                role: "assistant".to_string(),
-                content: response.clone(),
-            });
-            if messages.len() > 20 {
-                messages = messages.iter().rev().take(20).rev().cloned().collect();
-            }
-            cache.put(user_id, messages);
-        }
-        return Ok(());
+    // } else if detect_image_generation(&msg.content) {
+    //     debug!("Processing image generation for user {}", user_name);
+    //
+    //     let generating_msg = msg
+    //         .reply(
+    //             ctx,
+    //             format!(
+    //                 "{}, Ayumi lagi bikin gambar sesuai request kamu nih! Tunggu sebentar ya...",
+    //                 user_name
+    //             ),
+    //         )
+    //         .await.ok();
+    //
+    //     match generate_image(data, &msg.content).await {
+    //         Ok(result) => {
+    //             if let Some(m) = generating_msg { let _ = m.delete(ctx).await; }
+    //             let extension = if result.mime_type.contains("png") {
+    //                 "png"
+    //             } else {
+    //                 "jpg"
+    //             };
+    //             let filename = format!(
+    //                 "ayumi_generated_{}.{}",
+    //                 chrono::Utc::now().timestamp(),
+    //                 extension
+    //             );
+    //
+    //             let attachment = serenity::CreateAttachment::bytes(result.image_data, filename);
+    //             let reply_content = format!(
+    //                 "{}, nih gambar yang Ayumi buatin! Gimana, sesuai ekspektasi gak?",
+    //                 user_name
+    //             );
+    //
+    //             msg.channel_id
+    //                 .send_message(
+    //                     ctx,
+    //                     serenity::CreateMessage::new()
+    //                         .content(&reply_content)
+    //                         .add_file(attachment),
+    //                 )
+    //                 .await.ok();
+    //
+    //             response = reply_content;
+    //         }
+    //         Err(e) => {
+    //             error!("Image generation failed: {:?}", e);
+    //             if let Some(m) = generating_msg { let _ = m.delete(ctx).await; }
+    //             response = format!(
+    //                 "{}, maaf nih Ayumi lagi gabisa bikin gambar. Coba lagi nanti ya",
+    //                 user_name
+    //             );
+    //             msg.reply(ctx, &response).await.ok();
+    //         }
+    //     };
+    //
+    //     // Update history and return
+    //     {
+    //         let mut cache = CONVERSATION_HISTORY.lock().await;
+    //         messages.push(ChatMessage {
+    //             role: "assistant".to_string(),
+    //             content: response.clone(),
+    //         });
+    //         if messages.len() > 20 {
+    //             messages = messages.iter().rev().take(20).rev().cloned().collect();
+    //         }
+    //         cache.put(user_id, messages);
+    //     }
+    //     return Ok(());
     } else if detect_avatar_question(&msg.content) {
         debug!("Processing avatar analysis for user {}", user_name);
 
@@ -407,12 +452,29 @@ pub async fn handle_message(
             }
         };
 
-        let prompt = format!(
-            "Kamu adalah Ayumi. User {} (sudah {} kali ngobrol sama kamu) minta lihat foto profil mereka. Pertanyaan: \"{}\". Analisis dan komentar foto profil ini dengan fun tapi sopan.",
-            user_name, interaction_count, msg.content
+        // Use owocr to analyze avatar text
+        let ocr_result = match ocr::ocr_image(&avatar_data, "image/png").await {
+            Ok(res) => res,
+            Err(e) => {
+                debug!("OCR avatar error: {:?}", e);
+                "Tidak ada teks terdeteksi.".to_string()
+            }
+        };
+
+        let avatar_context = format!(
+            "User {} (sudah {} kali ngobrol) minta lihat foto profil mereka. Pertanyaan: \"{}\"\n\nTeks terdeteksi di foto profil (OCR):\n{}\n\nKomentar foto profil ini dengan fun tapi sopan.",
+            user_name, interaction_count, clean_content, ocr_result
         );
 
-        response = match completion_gemini_vision(data, &prompt, &avatar_data, "image/png").await {
+        let system_prompt = get_user_custom_prompt(msg.author.id.get())
+            .unwrap_or_else(|| AYUMI_SYSTEM_PROMPT.to_string());
+
+        let avatar_msgs = vec![ChatMessage {
+            role: "user".to_string(),
+            content: avatar_context,
+        }];
+
+        response = match completion_chat_with_fallback(data, &system_prompt, avatar_msgs).await {
             Ok(res) => res,
             Err(e) => {
                 error!("Avatar analysis error: {:?}", e);
