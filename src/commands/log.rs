@@ -204,7 +204,8 @@ fn create_log_embed(
         for (i, log) in page_logs.iter().enumerate() {
             let log_num = start_idx + i + 1;
             let activity = &log.activity;
-            let time = log.timestamps.created.format("%Y-%m-%d %H:%M").to_string();
+            let wib_offset = chrono::FixedOffset::east_opt(7 * 3600).unwrap();
+            let time = log.timestamps.created.with_timezone(&wib_offset).format("%Y-%m-%d %H:%M").to_string();
 
             let title_line = if let Some(ref title) = activity.title {
                 if title != "-" && !title.is_empty() {

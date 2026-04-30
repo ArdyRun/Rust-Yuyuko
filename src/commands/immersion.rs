@@ -306,10 +306,10 @@ pub async fn immersion(
 
     // Validate custom date if provided
     let effective_date = get_effective_date();
-    let date_str = if let Some(ref custom_date) = date {
+    let (date_str, date_for_log) = if let Some(ref custom_date) = date {
         // Strict validation: YYYY-MM-DD
         match NaiveDate::parse_from_str(custom_date, "%Y-%m-%d") {
-            Ok(parsed) => parsed.format("%Y-%m-%d").to_string(),
+            Ok(parsed) => (parsed.format("%Y-%m-%d").to_string(), parsed),
             Err(_) => {
                 ctx.say("Invalid date format. Please use YYYY-MM-DD (e.g. 2026-01-21)")
                     .await?;
@@ -317,7 +317,7 @@ pub async fn immersion(
             }
         }
     } else {
-        effective_date.format("%Y-%m-%d").to_string()
+        (effective_date.format("%Y-%m-%d").to_string(), effective_date)
     };
 
     // Calculate points
@@ -354,8 +354,8 @@ pub async fn immersion(
         "timestamps": {
             "created": now.to_rfc3339(),
             "date": date_str,
-            "month": format!("{}-{:02}", effective_date.year(), effective_date.month()),
-            "year": effective_date.year()
+            "month": format!("{}-{:02}", date_for_log.year(), date_for_log.month()),
+            "year": date_for_log.year()
         }
     });
 

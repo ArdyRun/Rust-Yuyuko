@@ -9,7 +9,7 @@ use unicode_normalization::UnicodeNormalization;
 use crate::api::llm::completion_gemini;
 use crate::Data;
 
-const ANNAS_BASE_URL: &str = "https://annas-archive.li";
+const ANNAS_BASE_URL: &str = "https://annas-archive.gl";
 
 // ── Local novel database ──────────────────────────────────────────
 

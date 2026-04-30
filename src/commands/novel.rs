@@ -12,8 +12,7 @@ use tracing::{info, warn};
 use crate::utils::config::colors;
 use crate::{Context, Error};
 
-const ANNAS_BASE_URL: &str = "https://annas-archive.li";
-const LIBGEN_BASE: &str = "https://libgen.li";
+const ANNAS_BASE_URL: &str = "https://annas-archive.gl";
 const PAGE_SIZE: usize = 10;
 
 // ── Structs ───────────────────────────────────────────────────────
@@ -25,8 +24,6 @@ pub struct AnnaResult {
     pub format: Option<String>,
     pub size: Option<String>,
     pub detail_url: String,
-    /// Direct download via Libgen mirror — constructed from md5, no extra request
-    pub download_url: String,
 }
 
 // ── Search ────────────────────────────────────────────────────────
@@ -120,16 +117,12 @@ fn parse_search_results(
             continue;
         }
 
-        // Direct download URL via Libgen — no extra request needed
-        let download_url = format!("{}/get.php?md5={}", LIBGEN_BASE, md5);
-
         results.push(AnnaResult {
             title,
             author,
             format,
             size,
             detail_url,
-            download_url,
         });
     }
 
@@ -178,7 +171,6 @@ fn search_local(query: &str) -> Vec<AnnaResult> {
             format: Some(n.format.clone()),
             size: Some(n.size.clone()),
             detail_url: n.url.clone(),
-            download_url: n.url.clone(), // Mega link is already direct
         })
         .collect()
 }
@@ -289,9 +281,8 @@ fn build_embed(
             let sz = r.size.as_deref().unwrap_or("?");
 
             format!(
-                "**{}.** [Download]({}) | [Detail]({})\n{}\nAuthor: {} | Format: {} | Size: {}",
+                "**{}.** [Link]({})\n{}\nAuthor: {} | Format: {} | Size: {}",
                 start + i + 1,
-                r.download_url,
                 r.detail_url,
                 truncate(&r.title, 60),
                 author,
