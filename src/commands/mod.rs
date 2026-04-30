@@ -1,5 +1,6 @@
 // Commands module
 pub mod afk;
+pub mod ayumu_exam;
 pub mod config;
 pub mod export;
 pub mod help;

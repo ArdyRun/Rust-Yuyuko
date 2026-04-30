@@ -18,11 +18,13 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use crate::models::guild::GuildConfig;
 
 use crate::api::firebase::FirebaseClient;
+use crate::api::ayumu::AyumuClient;
 
 /// User data shared across all commands
 pub struct Data {
     pub http_client: reqwest::Client,
     pub firebase: Arc<FirebaseClient>,
+    pub ayumu: Arc<AyumuClient>,
     pub guild_configs: Arc<DashMap<String, GuildConfig>>,
     pub role_rank_sessions: Arc<DashMap<serenity::UserId, crate::features::role_rank::QuizSession>>,
 }
@@ -33,6 +35,7 @@ impl std::fmt::Debug for Data {
         f.debug_struct("Data")
             .field("http_client", &"reqwest::Client")
             .field("firebase", &"FirebaseClient")
+            .field("ayumu", &"AyumuClient")
             .field("guild_configs", &"DashMap")
             .finish()
     }
@@ -58,6 +61,9 @@ fn get_commands() -> Vec<poise::Command<Data, Error>> {
         commands::react::react(),
         commands::prompt::prompt(),
         commands::role_rank::role_rank(),
+        commands::ayumu_exam::exam(),
+        commands::ayumu_exam::profile(),
+        commands::ayumu_exam::leaderboard(),
     ]
 }
 
@@ -91,6 +97,12 @@ async fn main() {
     let firebase = FirebaseClient::from_file(http_client.clone(), "firebase-key.json")
         .expect("Failed to load Firebase credentials");
     let firebase = Arc::new(firebase);
+
+    // Initialize Ayumu client
+    let ayumu_base_url = env::var("AYUMU_API_URL").unwrap_or_else(|_| "http://localhost:5000".to_string());
+    let ayumu = Arc::new(AyumuClient::new(http_client.clone(), &ayumu_base_url));
+    info!("Ayumu API client initialized ({})", ayumu_base_url);
+
     let guild_configs = Arc::new(DashMap::new());
     let role_rank_sessions = Arc::new(DashMap::new());
     info!("Firebase client initialized");
@@ -231,6 +243,7 @@ async fn main() {
                 Ok(Data {
                     http_client,
                     firebase,
+                    ayumu,
                     guild_configs: guild_configs_clone,
                     role_rank_sessions: role_rank_sessions.clone(),
                 })
