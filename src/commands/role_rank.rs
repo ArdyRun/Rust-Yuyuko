@@ -107,18 +107,16 @@ pub async fn delete(ctx: Context<'_>) -> Result<(), Error> {
                     }
                 }
 
-                // Clean up session if exists
-                {
-                    let data = ctx.data();
-                    data.role_rank_sessions.retain(|_, v| v.thread_id != gc.id);
-                }
-
                 ctx.say("Deleting channel in 3 seconds...").await?;
                 tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
                 if let Err(e) = gc.delete(&ctx.http()).await {
                     error!("Failed to delete channel: {:?}", e);
                     ctx.say(format!("Failed to delete channel: {}", e)).await?;
+                } else {
+                    let data = ctx.data();
+                    data.role_rank_sessions.retain(|_, v| v.thread_id != gc.id);
+                    crate::features::role_rank::persist_active_sessions(&data.role_rank_sessions);
                 }
             } else {
                 ctx.say("This command can only be used in quiz channels.")

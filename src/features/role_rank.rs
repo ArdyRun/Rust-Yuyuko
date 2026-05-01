@@ -1,9 +1,12 @@
 use once_cell::sync::Lazy;
 use poise::serenity_prelude as serenity;
 use std::collections::HashMap;
-use tracing::error;
+use std::sync::Arc;
+use tracing::{error, info, warn};
 
 use crate::{Data, Error};
+use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 use std::env;
 
 // --- Constants (Hardcoded from Go) ---
@@ -33,6 +36,265 @@ pub struct QuizSession {
     pub started: bool,
     pub active_attempt: bool,
     pub progress: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredQuizSession {
+    user_id: String,
+    quiz_id: String,
+    thread_id: String,
+    started: bool,
+    active_attempt: bool,
+    progress: usize,
+    updated_at: String,
+}
+
+const SESSION_STORE_PATH: &str = "data/role_rank_sessions.json";
+
+impl From<&QuizSession> for StoredQuizSession {
+    fn from(session: &QuizSession) -> Self {
+        Self {
+            user_id: session.user_id.to_string(),
+            quiz_id: session.quiz_id.clone(),
+            thread_id: session.thread_id.to_string(),
+            started: session.started,
+            active_attempt: session.active_attempt,
+            progress: session.progress,
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+}
+
+impl TryFrom<StoredQuizSession> for QuizSession {
+    type Error = anyhow::Error;
+
+    fn try_from(stored: StoredQuizSession) -> Result<Self, Self::Error> {
+        let user_id = stored.user_id.parse::<u64>()?;
+        let thread_id = stored.thread_id.parse::<u64>()?;
+
+        let quiz = QUIZZES
+            .get(&stored.quiz_id)
+            .ok_or_else(|| anyhow::anyhow!("Unknown quiz id {}", stored.quiz_id))?;
+        if stored.progress >= quiz.commands.len() {
+            anyhow::bail!(
+                "Invalid progress {} for quiz {}",
+                stored.progress,
+                stored.quiz_id
+            );
+        }
+
+        Ok(Self {
+            user_id: serenity::UserId::new(user_id),
+            quiz_id: stored.quiz_id,
+            thread_id: serenity::ChannelId::new(thread_id),
+            started: stored.started,
+            active_attempt: stored.active_attempt,
+            progress: stored.progress,
+        })
+    }
+}
+
+fn persist_role_rank_sessions(
+    sessions: &DashMap<serenity::UserId, QuizSession>,
+) -> Result<(), anyhow::Error> {
+    let stored: Vec<StoredQuizSession> = sessions
+        .iter()
+        .map(|entry| StoredQuizSession::from(entry.value()))
+        .collect();
+
+    let path = std::path::Path::new(SESSION_STORE_PATH);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let json = serde_json::to_string_pretty(&stored)?;
+    std::fs::write(path, json)?;
+    Ok(())
+}
+
+fn persist_or_log(sessions: &DashMap<serenity::UserId, QuizSession>) {
+    if let Err(e) = persist_role_rank_sessions(sessions) {
+        error!("Failed to persist role rank sessions: {:?}", e);
+    }
+}
+
+pub fn persist_active_sessions(sessions: &DashMap<serenity::UserId, QuizSession>) {
+    persist_or_log(sessions);
+}
+
+async fn has_role_rank_admin_access(
+    ctx: &serenity::Context,
+    msg: &serenity::Message,
+) -> Result<bool, Error> {
+    if let Ok(owner_id) = env::var("BOT_OWNER_ID") {
+        if msg.author.id.to_string() == owner_id {
+            return Ok(true);
+        }
+    }
+
+    if let Some(guild_id) = msg.guild_id {
+        if let Ok(member) = guild_id.member(&ctx.http, msg.author.id).await {
+            if let Some(guild) = guild_id.to_guild_cached(&ctx.cache) {
+                for role_id in &member.roles {
+                    if let Some(role) = guild.roles.get(role_id) {
+                        if role
+                            .permissions
+                            .contains(serenity::Permissions::MANAGE_GUILD)
+                            || role
+                                .permissions
+                                .contains(serenity::Permissions::ADMINISTRATOR)
+                        {
+                            return Ok(true);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(false)
+}
+
+async fn clear_all_quiz_channels_and_sessions(
+    ctx: &serenity::Context,
+    msg: &serenity::Message,
+    data: &Data,
+) -> Result<(), Error> {
+    let guild_id = match msg.guild_id {
+        Some(id) => id,
+        None => {
+            let _ = msg
+                .reply(&ctx.http, "Command ini hanya bisa digunakan di server.")
+                .await;
+            return Ok(());
+        }
+    };
+
+    let guild_id_str = guild_id.to_string();
+    let config = match crate::utils::config::get_guild_config(data, &guild_id_str).await {
+        Some(config) => config,
+        None => {
+            let _ = msg
+                .reply(&ctx.http, "Config guild belum tersedia. Tidak bisa membersihkan quiz.")
+                .await;
+            return Ok(());
+        }
+    };
+
+    let category_id = match config
+        .quiz_category_id
+        .as_ref()
+        .and_then(|id| id.parse::<u64>().ok())
+        .map(serenity::ChannelId::new)
+    {
+        Some(id) => id,
+        None => {
+            let _ = msg
+                .reply(
+                    &ctx.http,
+                    "Quiz Category belum dikonfigurasi. Tidak ada channel quiz yang bisa dibersihkan.",
+                )
+                .await;
+            return Ok(());
+        }
+    };
+
+    let selector_channel_id = config
+        .quiz_channel_id
+        .as_ref()
+        .and_then(|id| id.parse::<u64>().ok())
+        .map(serenity::ChannelId::new);
+
+    let channels = guild_id.channels(&ctx.http).await?;
+    let quiz_channels: Vec<serenity::GuildChannel> = channels
+        .into_values()
+        .filter(|channel| channel.parent_id == Some(category_id))
+        .filter(|channel| Some(channel.id) != selector_channel_id)
+        .collect();
+
+    let channel_ids: Vec<serenity::ChannelId> =
+        quiz_channels.iter().map(|channel| channel.id).collect();
+    let sessions_to_clear = data
+        .role_rank_sessions
+        .iter()
+        .filter(|entry| channel_ids.contains(&entry.value().thread_id))
+        .count();
+
+    let mut deleted_channels = 0usize;
+    let mut failed_channels = 0usize;
+
+    for channel in quiz_channels {
+        match channel.delete(&ctx.http).await {
+            Ok(_) => deleted_channels += 1,
+            Err(e) => {
+                failed_channels += 1;
+                error!(
+                    "Failed to delete quiz channel {} during a!q clear: {:?}",
+                    channel.id, e
+                );
+            }
+        }
+    }
+
+    if !channel_ids.is_empty() {
+        data.role_rank_sessions
+            .retain(|_, session| !channel_ids.contains(&session.thread_id));
+        persist_or_log(&data.role_rank_sessions);
+    }
+
+    let summary = if failed_channels == 0 {
+        format!(
+            "Quiz cleanup selesai. {} channel quiz dihapus dan {} session dibersihkan.",
+            deleted_channels, sessions_to_clear
+        )
+    } else {
+        format!(
+            "Quiz cleanup selesai sebagian. {} channel quiz dihapus, {} gagal dihapus, dan {} session dibersihkan.",
+            deleted_channels, failed_channels, sessions_to_clear
+        )
+    };
+
+    let _ = msg.reply(&ctx.http, summary).await;
+    Ok(())
+}
+
+/// Restore active quiz sessions from local storage after bot restart.
+pub fn restore_role_rank_sessions(sessions: &Arc<DashMap<serenity::UserId, QuizSession>>) {
+    let path = std::path::Path::new(SESSION_STORE_PATH);
+    if !path.exists() {
+        return;
+    }
+
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(e) => {
+            error!("Failed to read role rank session store: {:?}", e);
+            return;
+        }
+    };
+
+    let stored_sessions: Vec<StoredQuizSession> = match serde_json::from_str(&content) {
+        Ok(sessions) => sessions,
+        Err(e) => {
+            error!("Failed to parse role rank session store: {:?}", e);
+            return;
+        }
+    };
+
+    let mut restored = 0;
+    for stored in stored_sessions {
+        match QuizSession::try_from(stored) {
+            Ok(session) => {
+                sessions.insert(session.user_id, session);
+                restored += 1;
+            }
+            Err(e) => warn!("Skipping invalid role rank session: {:?}", e),
+        }
+    }
+
+    if restored > 0 {
+        info!("Restored {} role rank quiz session(s)", restored);
+    }
 }
 
 // --- Quiz Data Definitions ---
@@ -205,6 +467,7 @@ pub async fn handle_interaction(
                 // Channel gone, remove session
                 drop(session); // release lock
                 data.role_rank_sessions.remove(&user.id);
+                persist_or_log(&data.role_rank_sessions);
             }
         }
     }
@@ -318,6 +581,7 @@ pub async fn handle_interaction(
             progress: 0,
         },
     );
+    persist_or_log(&data.role_rank_sessions);
 
     // Send Welcome Message
     let command_text = quiz.commands[0];
@@ -357,34 +621,63 @@ pub async fn handle_message(
         if msg.content.starts_with("k!quiz") {
             // Check if this is an active session channel
             // We need to find if this channel belongs to ANY active session for THIS user
-            if let Some(mut session) = data.role_rank_sessions.get_mut(&msg.author.id) {
-                if session.thread_id == msg.channel_id {
-                    let quiz = match QUIZZES.get(&session.quiz_id) {
-                        Some(q) => q,
-                        None => return Ok(()),
-                    };
+            let mut response: Option<String> = None;
+            let mut should_persist = false;
 
-                    let expected_command = quiz.commands[session.progress];
+            {
+                if let Some(mut session) = data.role_rank_sessions.get_mut(&msg.author.id) {
+                    if session.thread_id == msg.channel_id {
+                        let quiz = match QUIZZES.get(&session.quiz_id) {
+                            Some(q) => q,
+                            None => return Ok(()),
+                        };
 
-                    if validate_command(&msg.content, expected_command) {
-                        session.started = true;
-                        session.active_attempt = true;
-                        let _ = msg
-                            .channel_id
-                            .say(
-                                &ctx.http,
-                                "Command Valid! Menunggu hasil dari Kotoba Bot...",
-                            )
-                            .await;
-                    } else {
-                        session.active_attempt = false; // Invalidate previous attempt if any
-                        let _ = msg.reply(&ctx.http, format!(
-                            "**Command Tidak Sesuai**\nUntuk role ini, kamu wajib menggunakan command yang persis sama:\n```\n{}\n```\nJika kamu sedang menjalankan quiz, selesaikan dulu atau ketik `k!quiz stop` lalu paste commandnya lagi.", 
-                            expected_command
-                        )).await;
+                        let expected_command = quiz.commands[session.progress];
+
+                        if validate_command(&msg.content, expected_command) {
+                            session.started = true;
+                            session.active_attempt = true;
+                            should_persist = true;
+                            response = Some(
+                                "Command Valid! Menunggu hasil dari Kotoba Bot...".to_string(),
+                            );
+                        } else {
+                            session.active_attempt = false; // Invalidate previous attempt if any
+                            should_persist = true;
+                            response = Some(format!(
+                                "**Command Tidak Sesuai**\nUntuk role ini, kamu wajib menggunakan command yang persis sama:\n```\n{}\n```\nJika kamu sedang menjalankan quiz, selesaikan dulu atau ketik `k!quiz stop` lalu paste commandnya lagi.",
+                                expected_command
+                            ));
+                        }
                     }
                 }
             }
+
+            if should_persist {
+                persist_or_log(&data.role_rank_sessions);
+            }
+
+            if let Some(response) = response {
+                if response.starts_with("Command Valid!") {
+                    let _ = msg.channel_id.say(&ctx.http, response).await;
+                } else {
+                    let _ = msg.reply(&ctx.http, response).await;
+                }
+            }
+        }
+        // Handle a!q clear (bulk cleanup for stuck quiz channels/sessions)
+        else if msg.content.trim().eq_ignore_ascii_case("a!q clear") {
+            if !has_role_rank_admin_access(ctx, msg).await? {
+                let _ = msg
+                    .reply(
+                        &ctx.http,
+                        "**Access Denied**: You need `MANAGE_GUILD` permissions or be the Bot Owner.",
+                    )
+                    .await;
+                return Ok(());
+            }
+
+            clear_all_quiz_channels_and_sessions(ctx, msg, data).await?;
         }
         // Handle a!del (manual delete)
         else if msg.content.starts_with("a!del") {
@@ -426,15 +719,15 @@ pub async fn handle_message(
                             .await;
                         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
-                        // Remove session first
-                        // Use retain to remove any session pointing to this channel ID
-                        data.role_rank_sessions.retain(|_, v| v.thread_id != gc.id);
-
                         if let Err(e) = gc.delete(&ctx.http).await {
                             error!("Failed to delete channel: {:?}", e);
                             let _ = msg
                                 .reply(&ctx.http, format!("Failed to delete channel: {}", e))
                                 .await;
+                        } else {
+                            // Only drop the session after the channel is gone.
+                            data.role_rank_sessions.retain(|_, v| v.thread_id != gc.id);
+                            persist_or_log(&data.role_rank_sessions);
                         }
                     } else {
                         let _ = msg
@@ -446,42 +739,7 @@ pub async fn handle_message(
         }
         // Handle a!clear <user_id> (Manual Role Reset)
         else if msg.content.starts_with("a!clear") {
-            // 1. Permission Check
-            let mut is_authorized = false;
-
-            // Check Owner
-            if let Ok(owner_id) = env::var("BOT_OWNER_ID") {
-                if msg.author.id.to_string() == owner_id {
-                    is_authorized = true;
-                }
-            }
-
-            // Check Manage Guild
-            if !is_authorized {
-                if let Some(guild_id) = msg.guild_id {
-                    if let Ok(member) = guild_id.member(&ctx.http, msg.author.id).await {
-                        // Standard permission check
-                        if let Some(guild) = guild_id.to_guild_cached(&ctx.cache) {
-                            for role_id in &member.roles {
-                                if let Some(role) = guild.roles.get(role_id) {
-                                    if role
-                                        .permissions
-                                        .contains(serenity::Permissions::MANAGE_GUILD)
-                                        || role
-                                            .permissions
-                                            .contains(serenity::Permissions::ADMINISTRATOR)
-                                    {
-                                        is_authorized = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if !is_authorized {
+            if !has_role_rank_admin_access(ctx, msg).await? {
                 let _ = msg.reply(&ctx.http, "**Access Denied**: You need `MANAGE_GUILD` permissions or be the Bot Owner.").await;
                 return Ok(());
             }
@@ -671,8 +929,8 @@ async fn handle_kotoba_message(
             if !title_deck.contains(&expected_deck) || actual_score != expected_score {
                 // Double check if strict deck check is too strict or if title mismatch provided
                 if !score_limit_reached {
-                    let _ = msg.channel_id.say(&ctx.http, 
-                        format!("⚠️ **Validasi Gagal**\nDeck atau Score tidak sesuai.\nExpected Deck: {}\nExpected Score: {}\nDetected Deck: {}\nDetected Score: {}", 
+                    let _ = msg.channel_id.say(&ctx.http,
+                        format!("⚠️ **Validasi Gagal**\nDeck atau Score tidak sesuai.\nExpected Deck: {}\nExpected Score: {}\nDetected Deck: {}\nDetected Score: {}",
                         expected_deck, expected_score, title_deck, actual_score)
                     ).await;
                     return Ok(());
@@ -686,6 +944,8 @@ async fn handle_kotoba_message(
         if session.progress + 1 < quiz.commands.len() {
             session.progress += 1;
             let next_cmd = quiz.commands[session.progress];
+            drop(session);
+            persist_or_log(&data.role_rank_sessions);
 
             let _ = msg
                 .channel_id
@@ -702,6 +962,8 @@ async fn handle_kotoba_message(
             // Assign Role
             session.started = false; // Stop tracking
             session.active_attempt = false;
+            drop(session);
+            persist_or_log(&data.role_rank_sessions);
 
             let guild_id = msg.guild_id.unwrap();
             let member = guild_id.member(&ctx.http, user_id).await?;
@@ -742,7 +1004,7 @@ async fn handle_kotoba_message(
                         .await;
                 } else {
                     let _ = msg.channel_id.say(&ctx.http, format!(
-                        "**SELAMAT**! Kamu sekarang mendapatkan role **{}**.\nChannel ini akan dihapus dalam 30 detik.", 
+                        "**SELAMAT**! Kamu sekarang mendapatkan role **{}**.\nChannel ini akan dihapus dalam 30 detik.",
                         quiz.label
                     )).await;
 
@@ -772,6 +1034,7 @@ async fn handle_kotoba_message(
                 tokio::time::sleep(std::time::Duration::from_secs(30)).await;
                 let _ = channel_id.delete(&http).await;
                 sessions.remove(&u_id);
+                persist_or_log(&sessions);
             });
         }
     }

@@ -105,6 +105,7 @@ async fn main() {
 
     let guild_configs = Arc::new(DashMap::new());
     let role_rank_sessions = Arc::new(DashMap::new());
+    features::role_rank::restore_role_rank_sessions(&role_rank_sessions);
     info!("Firebase client initialized");
 
     // Setup framework
