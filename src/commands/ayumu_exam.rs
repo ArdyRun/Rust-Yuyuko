@@ -116,7 +116,7 @@ pub async fn profile(ctx: Context<'_>) -> Result<(), Error> {
 
 /// View the JLPT leaderboard
 #[poise::command(slash_command, prefix_command)]
-pub async fn leaderboard(
+pub async fn jlpt_leaderboard(
     ctx: Context<'_>,
     #[description = "JLPT level (optional)"] level: Option<JlptLevel>,
     #[description = "Time period"] period: Option<LeaderboardPeriod>,

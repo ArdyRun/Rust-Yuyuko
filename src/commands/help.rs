@@ -27,7 +27,8 @@ pub async fn help(ctx: Context<'_>) -> Result<(), Error> {
         )
         .field(
             "Community",
-            "`/leaderboard` - View rankings\n\
+            "`/leaderboard` - View immersion rankings\n\
+            `/jlpt_leaderboard` - View JLPT quiz rankings\n\
             `/log time` - View recent logs",
             false,
         )

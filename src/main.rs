@@ -63,7 +63,7 @@ fn get_commands() -> Vec<poise::Command<Data, Error>> {
         commands::role_rank::role_rank(),
         commands::ayumu_exam::exam(),
         commands::ayumu_exam::profile(),
-        commands::ayumu_exam::leaderboard(),
+        commands::ayumu_exam::jlpt_leaderboard(),
     ]
 }
 
