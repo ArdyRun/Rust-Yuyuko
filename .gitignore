@@ -19,5 +19,10 @@ deploy.tar.gz
 stop_vps.py
 test_models.py
 
+# Python cache
+__pycache__/
+**/__pycache__/
+*.pyc
+
 # Runtime state
 data/role_rank_sessions.json
