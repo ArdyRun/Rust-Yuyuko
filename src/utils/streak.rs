@@ -114,7 +114,6 @@ fn calculate_longest_streak(dates: &[NaiveDate]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Local;
 
     fn today_str() -> String {
         get_effective_date().format("%Y-%m-%d").to_string()

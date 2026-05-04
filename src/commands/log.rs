@@ -205,7 +205,12 @@ fn create_log_embed(
             let log_num = start_idx + i + 1;
             let activity = &log.activity;
             let wib_offset = chrono::FixedOffset::east_opt(7 * 3600).unwrap();
-            let time = log.timestamps.created.with_timezone(&wib_offset).format("%Y-%m-%d %H:%M").to_string();
+            let time = log
+                .timestamps
+                .created
+                .with_timezone(&wib_offset)
+                .format("%Y-%m-%d %H:%M")
+                .to_string();
 
             let title_line = if let Some(ref title) = activity.title {
                 if title != "-" && !title.is_empty() {
@@ -689,4 +694,3 @@ async fn delete_log_from_firebase(
 
     Ok(())
 }
-

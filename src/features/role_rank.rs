@@ -175,7 +175,10 @@ async fn clear_all_quiz_channels_and_sessions(
         Some(config) => config,
         None => {
             let _ = msg
-                .reply(&ctx.http, "Config guild belum tersedia. Tidak bisa membersihkan quiz.")
+                .reply(
+                    &ctx.http,
+                    "Config guild belum tersedia. Tidak bisa membersihkan quiz.",
+                )
                 .await;
             return Ok(());
         }

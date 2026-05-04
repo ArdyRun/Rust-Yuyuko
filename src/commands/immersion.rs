@@ -317,7 +317,10 @@ pub async fn immersion(
             }
         }
     } else {
-        (effective_date.format("%Y-%m-%d").to_string(), effective_date)
+        (
+            effective_date.format("%Y-%m-%d").to_string(),
+            effective_date,
+        )
     };
 
     // Calculate points

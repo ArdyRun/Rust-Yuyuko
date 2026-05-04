@@ -41,7 +41,7 @@ struct CachedToken {
 pub struct QueryFilter {
     /// Field path, e.g., "timestamps.created" or "activity.type"
     pub field: String,
-    /// Operator: "EQUAL", "LESS_THAN", "LESS_THAN_OR_EQUAL", 
+    /// Operator: "EQUAL", "LESS_THAN", "LESS_THAN_OR_EQUAL",
     /// "GREATER_THAN", "GREATER_THAN_OR_EQUAL", "NOT_EQUAL"
     pub op: String,
     /// Value in Firestore format (e.g., { "stringValue": "..." })
@@ -74,7 +74,10 @@ pub enum TransactionWrite {
     /// Delete a document by path (e.g., "users/123/immersion_logs/abc")
     Delete { document_path: String },
     /// Update specific fields in a document
-    Update { document_path: String, fields: Value },
+    Update {
+        document_path: String,
+        fields: Value,
+    },
 }
 
 /// Firebase REST API client
@@ -447,16 +450,13 @@ impl FirebaseClient {
         start_after: Option<&Value>,
     ) -> Result<Vec<(String, Value)>> {
         let token = self.get_access_token().await?;
-        
+
         // Parent path for the query
         let parent = format!(
             "projects/{}/databases/(default)/documents/{}/{}",
             self.service_account.project_id, parent_collection, parent_doc_id
         );
-        let url = format!(
-            "https://firestore.googleapis.com/v1/{}:runQuery",
-            parent
-        );
+        let url = format!("https://firestore.googleapis.com/v1/{}:runQuery", parent);
 
         // Build structuredQuery
         let mut query = json!({
@@ -597,7 +597,10 @@ impl FirebaseClient {
                     );
                     json!({ "delete": full_path })
                 }
-                TransactionWrite::Update { document_path, fields } => {
+                TransactionWrite::Update {
+                    document_path,
+                    fields,
+                } => {
                     let full_path = format!(
                         "projects/{}/databases/(default)/documents/{}",
                         self.service_account.project_id, document_path

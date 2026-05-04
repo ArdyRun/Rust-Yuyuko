@@ -134,7 +134,8 @@ pub async fn jlpt_leaderboard(
     {
         Ok(e) => e,
         Err(e) => {
-            ctx.say(format!("Failed to load leaderboard: {}", e)).await?;
+            ctx.say(format!("Failed to load leaderboard: {}", e))
+                .await?;
             return Ok(());
         }
     };

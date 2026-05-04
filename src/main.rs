@@ -17,8 +17,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::models::guild::GuildConfig;
 
-use crate::api::firebase::FirebaseClient;
 use crate::api::ayumu::AyumuClient;
+use crate::api::firebase::FirebaseClient;
 
 /// User data shared across all commands
 pub struct Data {
@@ -99,7 +99,8 @@ async fn main() {
     let firebase = Arc::new(firebase);
 
     // Initialize Ayumu client
-    let ayumu_base_url = env::var("AYUMU_API_URL").unwrap_or_else(|_| "http://localhost:5000".to_string());
+    let ayumu_base_url =
+        env::var("AYUMU_API_URL").unwrap_or_else(|_| "http://localhost:5000".to_string());
     let ayumu = Arc::new(AyumuClient::new(http_client.clone(), &ayumu_base_url));
     info!("Ayumu API client initialized ({})", ayumu_base_url);
 
@@ -299,16 +300,16 @@ async fn main() {
                 .map(|(guild_id, channel_id_str)| {
                     let http = http.clone();
                     let configs = configs.clone();
-                    
+
                     async move {
                         if let Ok(channel_id) = channel_id_str.parse::<u64>().map(serenity::ChannelId::new) {
                             // Check last message in channel
                             match channel_id.messages(&http, serenity::GetMessages::new().limit(1)).await {
                                 Ok(messages) => {
                                     let needs_refresh = if let Some(last_msg) = messages.first() {
-                                        !last_msg.author.bot 
+                                        !last_msg.author.bot
                                     } else {
-                                        true 
+                                        true
                                     };
 
                                     if needs_refresh {
@@ -320,7 +321,7 @@ async fn main() {
                                                 }
                                             }
                                         }
-                                        
+
                                         // Send new selector
                                         if let Err(e) = crate::commands::role_rank::send_quiz_selector(&http, channel_id).await {
                                             error!("Failed to auto-refresh quiz selector: {:?}", e);

@@ -318,9 +318,15 @@ pub async fn smart_novel_search(data: &Data, query: &str) -> String {
     // If Anna's Archive has results, use them
     if !anna_results.is_empty() {
         let title_str = if let Some(lvl) = level {
-            format!("**Rekomendasi Novel untuk Level {} (via Anna's Archive):**\n\n", lvl)
+            format!(
+                "**Rekomendasi Novel untuk Level {} (via Anna's Archive):**\n\n",
+                lvl
+            )
         } else if let Some(g) = genre {
-            format!("**Rekomendasi Novel Genre {} (via Anna's Archive):**\n\n", g)
+            format!(
+                "**Rekomendasi Novel Genre {} (via Anna's Archive):**\n\n",
+                g
+            )
         } else {
             format!("**Hasil Pencarian '{}' (via Anna's Archive):**\n\n", query)
         };

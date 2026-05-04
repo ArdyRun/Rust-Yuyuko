@@ -8,10 +8,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, error};
 
-use crate::api::llm::{
-    completion_chat_with_fallback,
-    ChatMessage,
-};
+use crate::api::llm::{completion_chat_with_fallback, ChatMessage};
 use crate::api::ocr;
 use crate::features::custom_prompt::get_user_custom_prompt;
 use crate::features::novel_recommender::smart_novel_search;
@@ -244,7 +241,10 @@ pub async fn handle_message(
         // Other channels: require direct @mention only
         let has_direct_mention = msg.mentions.iter().any(|u| u.id == bot_id);
         // Block: no mention, @everyone/@here, or reply to bot's own message (auto-mention)
-        let is_reply_to_bot = msg.referenced_message.as_ref().map_or(false, |r| r.author.id == bot_id);
+        let is_reply_to_bot = msg
+            .referenced_message
+            .as_ref()
+            .map_or(false, |r| r.author.id == bot_id);
         if !has_direct_mention || msg.mention_everyone || is_reply_to_bot {
             return Ok(());
         }
@@ -307,7 +307,10 @@ pub async fn handle_message(
     let response: String;
 
     if let Some(att) = attachment {
-        debug!("Processing image attachment via owocr for user {}", user_name);
+        debug!(
+            "Processing image attachment via owocr for user {}",
+            user_name
+        );
 
         let image_data = match att.download().await {
             Ok(d) => d,
@@ -349,7 +352,8 @@ pub async fn handle_message(
         let system_prompt = get_user_custom_prompt(msg.author.id.get())
             .unwrap_or_else(|| AYUMI_SYSTEM_PROMPT.to_string());
 
-        response = match completion_chat_with_fallback(data, &system_prompt, messages.clone()).await {
+        response = match completion_chat_with_fallback(data, &system_prompt, messages.clone()).await
+        {
             Ok(res) => res,
             Err(e) => {
                 error!("Ayumi image chat error: {:?}", e);

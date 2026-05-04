@@ -4,7 +4,9 @@
 use crate::utils::config::colors;
 use crate::utils::points::calculate_points;
 use crate::{Context, Error};
+use chrono::{DateTime, Datelike, Duration, NaiveDate};
 use poise::serenity_prelude as serenity;
+use serde_json::Value;
 use tracing::error;
 
 /// Time period for leaderboard
@@ -124,32 +126,9 @@ pub async fn leaderboard(
 
     let data = ctx.data();
     let media_type_filter = media_type.as_str();
-
-    // Build title
-    let mut title = format!("{} Leaderboard", timestamp.label());
-    if let Some(m) = month {
-        let month_names = [
-            "",
-            "January",
-            "February",
-            "March",
-            "April",
-            "May",
-            "June",
-            "July",
-            "August",
-            "September",
-            "October",
-            "November",
-            "December",
-        ];
-        let y = year.unwrap_or_else(|| chrono::Utc::now().year());
-        title = format!("{} - {} {}", title, month_names[m as usize], y);
-    } else if let Some(y) = year {
-        if matches!(timestamp, TimePeriod::Yearly) {
-            title = format!("{} - {}", title, y);
-        }
-    }
+    let effective_date = crate::utils::config::get_effective_date();
+    let period_filter = PeriodFilter::new(timestamp, month, year, effective_date);
+    let title = period_filter.title();
 
     // Fetch all users
     let users = match data.firebase.get_all_users().await {
@@ -166,11 +145,14 @@ pub async fn leaderboard(
         return Ok(());
     }
 
-    // For all_time, use stats from user doc directly
     let mut leaderboard: Vec<LeaderboardEntry> = Vec::new();
 
     for user_doc in users {
-        let _user_id = user_doc.get("_id").and_then(|v| v.as_str()).unwrap_or("");
+        let user_id = user_doc.get("_id").and_then(|v| v.as_str()).unwrap_or("");
+        if user_id.is_empty() {
+            continue;
+        }
+
         let profile = user_doc.get("profile");
         let display_name = profile
             .and_then(|p| p.get("displayName"))
@@ -182,78 +164,20 @@ pub async fn leaderboard(
             })
             .unwrap_or("Unknown");
 
-        if matches!(timestamp, TimePeriod::AllTime) {
-            // Use aggregated stats
-            let stats = match user_doc.get("stats") {
-                Some(s) if s.is_object() => s,
-                _ => continue,
-            };
-
-            let mut total_points: f64 = 0.0;
-            let mut total_amount: f64 = 0.0;
-
-            if let Some(stats_obj) = stats.as_object() {
-                for (mt, data) in stats_obj {
-                    // Filter by media type if specified
-                    if let Some(filter) = media_type_filter {
-                        if mt != filter {
-                            continue;
-                        }
-                    }
-
-                    let amount = data.get("total").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                    if amount > 0.0 {
-                        total_points += calculate_points(mt, amount) as f64;
-                        if media_type_filter.is_some() {
-                            total_amount += amount;
-                        }
-                    }
-                }
-            }
-
-            if total_points > 0.0 {
-                leaderboard.push(LeaderboardEntry {
-                    display_name: display_name.to_string(),
-                    points: total_points,
-                    amount: total_amount,
-                });
-            }
+        let total_points = if matches!(timestamp, TimePeriod::AllTime) {
+            calculate_all_time_points(&user_doc, media_type_filter)
         } else {
-            // For weekly/monthly/yearly, we would need to query immersion_logs
-            // For now, use all_time stats as placeholder
-            let stats = match user_doc.get("stats") {
-                Some(s) if s.is_object() => s,
-                _ => continue,
-            };
+            calculate_interval_points(data, user_id, &period_filter, media_type_filter).await
+        };
 
-            let mut total_points: f64 = 0.0;
-
-            if let Some(stats_obj) = stats.as_object() {
-                for (mt, data) in stats_obj {
-                    if let Some(filter) = media_type_filter {
-                        if mt != filter {
-                            continue;
-                        }
-                    }
-
-                    let amount = data.get("total").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                    if amount > 0.0 {
-                        total_points += calculate_points(mt, amount) as f64;
-                    }
-                }
-            }
-
-            if total_points > 0.0 {
-                leaderboard.push(LeaderboardEntry {
-                    display_name: display_name.to_string(),
-                    points: total_points,
-                    amount: 0.0,
-                });
-            }
+        if total_points > 0.0 {
+            leaderboard.push(LeaderboardEntry {
+                display_name: display_name.to_string(),
+                points: total_points,
+            });
         }
     }
 
-    // Sort by points
     leaderboard.sort_by(|a, b| {
         b.points
             .partial_cmp(&a.points)
@@ -274,7 +198,6 @@ pub async fn leaderboard(
         return Ok(());
     }
 
-    // Build leaderboard description
     let mut description = String::from("Here's the list of top immersionists:\n\n");
     let top_count = leaderboard.len().min(10);
 
@@ -297,11 +220,233 @@ pub async fn leaderboard(
     Ok(())
 }
 
-use chrono::Datelike;
+fn calculate_all_time_points(user_doc: &Value, media_type_filter: Option<&str>) -> f64 {
+    let stats = match user_doc.get("stats") {
+        Some(s) if s.is_object() => s,
+        _ => return 0.0,
+    };
+
+    let mut total_points = 0.0;
+    if let Some(stats_obj) = stats.as_object() {
+        for (media_type, data) in stats_obj {
+            if let Some(filter) = media_type_filter {
+                if media_type != filter {
+                    continue;
+                }
+            }
+
+            let amount = data.get("total").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            if amount > 0.0 {
+                total_points += calculate_points(media_type, amount) as f64;
+            }
+        }
+    }
+
+    total_points
+}
+
+async fn calculate_interval_points(
+    data: &crate::Data,
+    user_id: &str,
+    period_filter: &PeriodFilter,
+    media_type_filter: Option<&str>,
+) -> f64 {
+    let logs = match data
+        .firebase
+        .query_subcollection("users", user_id, "immersion_logs")
+        .await
+    {
+        Ok(logs) => logs,
+        Err(e) => {
+            error!(
+                "Failed to fetch immersion logs for user {}: {:?}",
+                user_id, e
+            );
+            return 0.0;
+        }
+    };
+
+    let mut total_points = 0.0;
+
+    for log in logs {
+        if !period_filter.matches_log(&log) {
+            continue;
+        }
+
+        let activity = match log.get("activity") {
+            Some(activity) if activity.is_object() => activity,
+            _ => continue,
+        };
+
+        let log_media_type = match activity.get("type").and_then(|v| v.as_str()) {
+            Some(media_type) => media_type,
+            None => continue,
+        };
+
+        if let Some(filter) = media_type_filter {
+            if log_media_type != filter {
+                continue;
+            }
+        }
+
+        let amount = activity
+            .get("amount")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        if amount > 0.0 {
+            total_points += calculate_points(log_media_type, amount) as f64;
+        }
+    }
+
+    total_points
+}
+
+fn extract_log_date(log: &Value) -> Option<NaiveDate> {
+    let timestamps = log.get("timestamps")?;
+
+    if let Some(date) = timestamps.get("date").and_then(|v| v.as_str()) {
+        if let Ok(parsed) = NaiveDate::parse_from_str(date, "%Y-%m-%d") {
+            return Some(parsed);
+        }
+    }
+
+    if let Some(created) = timestamps.get("created").and_then(|v| v.as_str()) {
+        if let Ok(created_utc) = DateTime::parse_from_rfc3339(created) {
+            let wib_offset = chrono::FixedOffset::east_opt(7 * 3600)?;
+            return Some(created_utc.with_timezone(&wib_offset).date_naive());
+        }
+    }
+
+    None
+}
+
+fn month_name(month: u32) -> &'static str {
+    match month {
+        1 => "January",
+        2 => "February",
+        3 => "March",
+        4 => "April",
+        5 => "May",
+        6 => "June",
+        7 => "July",
+        8 => "August",
+        9 => "September",
+        10 => "October",
+        11 => "November",
+        12 => "December",
+        _ => "Unknown",
+    }
+}
+
+struct PeriodFilter {
+    period: TimePeriod,
+    start: Option<NaiveDate>,
+    end: Option<NaiveDate>,
+    month: Option<(i32, u32)>,
+    year: Option<i32>,
+}
+
+impl PeriodFilter {
+    fn new(
+        period: TimePeriod,
+        month: Option<MonthChoice>,
+        year: Option<i32>,
+        effective_date: NaiveDate,
+    ) -> Self {
+        match period {
+            TimePeriod::Weekly => Self {
+                period,
+                start: Some(effective_date - Duration::days(6)),
+                end: Some(effective_date),
+                month: None,
+                year: None,
+            },
+            TimePeriod::Monthly => Self {
+                period,
+                start: None,
+                end: None,
+                month: Some((
+                    year.unwrap_or(effective_date.year()),
+                    month.map(|m| m as u32).unwrap_or(effective_date.month()),
+                )),
+                year: None,
+            },
+            TimePeriod::Yearly => Self {
+                period,
+                start: None,
+                end: None,
+                month: None,
+                year: Some(year.unwrap_or(effective_date.year())),
+            },
+            TimePeriod::AllTime => Self {
+                period,
+                start: None,
+                end: None,
+                month: None,
+                year: None,
+            },
+        }
+    }
+
+    fn title(&self) -> String {
+        match self.period {
+            TimePeriod::Weekly => {
+                let start = self.start.expect("weekly period missing start date");
+                let end = self.end.expect("weekly period missing end date");
+                format!(
+                    "Weekly Leaderboard - {} to {}",
+                    start.format("%Y-%m-%d"),
+                    end.format("%Y-%m-%d")
+                )
+            }
+            TimePeriod::Monthly => {
+                let (year, month) = self.month.expect("monthly period missing month");
+                format!("Monthly Leaderboard - {} {}", month_name(month), year)
+            }
+            TimePeriod::Yearly => {
+                let year = self.year.expect("yearly period missing year");
+                format!("Yearly Leaderboard - {}", year)
+            }
+            TimePeriod::AllTime => "All-time Leaderboard".to_string(),
+        }
+    }
+
+    fn matches_log(&self, log: &Value) -> bool {
+        match self.period {
+            TimePeriod::AllTime => true,
+            TimePeriod::Weekly => {
+                let date = match extract_log_date(log) {
+                    Some(date) => date,
+                    None => return false,
+                };
+
+                let start = self.start.expect("weekly period missing start date");
+                let end = self.end.expect("weekly period missing end date");
+                date >= start && date <= end
+            }
+            TimePeriod::Monthly => {
+                let date = match extract_log_date(log) {
+                    Some(date) => date,
+                    None => return false,
+                };
+
+                let (year, month) = self.month.expect("monthly period missing month");
+                date.year() == year && date.month() == month
+            }
+            TimePeriod::Yearly => {
+                let date = match extract_log_date(log) {
+                    Some(date) => date,
+                    None => return false,
+                };
+
+                let year = self.year.expect("yearly period missing year");
+                date.year() == year
+            }
+        }
+    }
+}
 
 struct LeaderboardEntry {
     display_name: String,
     points: f64,
-    #[allow(dead_code)]
-    amount: f64,
 }

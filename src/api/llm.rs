@@ -106,11 +106,21 @@ pub async fn completion_chat_with_fallback(
         Err(e) => {
             let err_str = format!("{:?}", e);
             // Only fallback on rate limit (429) or server errors (5xx)
-            if err_str.contains("429") || err_str.contains("500") || err_str.contains("503") || err_str.contains("RESOURCE_EXHAUSTED") {
-                tracing::warn!("Gemini rate-limited, falling back to OpenRouter: {}", err_str);
+            if err_str.contains("429")
+                || err_str.contains("500")
+                || err_str.contains("503")
+                || err_str.contains("RESOURCE_EXHAUSTED")
+            {
+                tracing::warn!(
+                    "Gemini rate-limited, falling back to OpenRouter: {}",
+                    err_str
+                );
             } else {
                 // Non-rate-limit error — still fallback but log as error
-                tracing::error!("Gemini chat error (falling back to OpenRouter): {}", err_str);
+                tracing::error!(
+                    "Gemini chat error (falling back to OpenRouter): {}",
+                    err_str
+                );
             }
         }
     }
@@ -315,10 +325,17 @@ pub async fn completion_gemini_vision(
             Ok(res) => {
                 let status = res.status();
                 let err_text = res.text().await.unwrap_or_default();
-                tracing::warn!("Gemini Vision failed ({}), falling back to OpenRouter: {}", status, err_text);
+                tracing::warn!(
+                    "Gemini Vision failed ({}), falling back to OpenRouter: {}",
+                    status,
+                    err_text
+                );
             }
             Err(e) => {
-                tracing::warn!("Gemini Vision request error, falling back to OpenRouter: {:?}", e);
+                tracing::warn!(
+                    "Gemini Vision request error, falling back to OpenRouter: {:?}",
+                    e
+                );
             }
         }
     }

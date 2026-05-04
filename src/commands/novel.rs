@@ -93,9 +93,7 @@ fn parse_search_results(
                     // Metadata line: "Japanese [ja] · PDF · 86.7MB · 2024"
                     for line in container.text().collect::<String>().lines() {
                         let t = line.trim();
-                        if t.contains(" · ")
-                            && (t.contains("Japanese") || t.contains("[ja]"))
-                        {
+                        if t.contains(" · ") && (t.contains("Japanese") || t.contains("[ja]")) {
                             let parts: Vec<&str> = t.split(" · ").collect();
                             if parts.len() >= 3 {
                                 format = Some(parts[1].trim().to_uppercase());
@@ -191,7 +189,8 @@ pub async fn novel(
         Ok(_) => {
             let local = search_local(&title);
             if local.is_empty() {
-                ctx.say("Tidak ditemukan novel dengan judul tersebut.").await?;
+                ctx.say("Tidak ditemukan novel dengan judul tersebut.")
+                    .await?;
                 return Ok(());
             }
             (local, "Local Database")
@@ -200,8 +199,10 @@ pub async fn novel(
             warn!("Anna's Archive error: {:?}", e);
             let local = search_local(&title);
             if local.is_empty() {
-                ctx.say("Anna's Archive tidak dapat dijangkau dan tidak ada hasil di database lokal.")
-                    .await?;
+                ctx.say(
+                    "Anna's Archive tidak dapat dijangkau dan tidak ada hasil di database lokal.",
+                )
+                .await?;
                 return Ok(());
             }
             (local, "Local Database")
