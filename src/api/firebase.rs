@@ -153,13 +153,7 @@ impl FirebaseClient {
         };
 
         // Encode JWT
-        // Some deployments store PEM with literal "\\n" sequences; normalize it.
-        let normalized_private_key = self
-            .service_account
-            .private_key
-            .replace("\\r\\n", "\n")
-            .replace("\\n", "\n");
-        let key = EncodingKey::from_rsa_pem(normalized_private_key.as_bytes())?;
+        let key = EncodingKey::from_rsa_pem(self.service_account.private_key.as_bytes())?;
         let jwt = encode(&Header::new(Algorithm::RS256), &claims, &key)?;
 
         // Exchange JWT for access token
