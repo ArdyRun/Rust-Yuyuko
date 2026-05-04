@@ -153,7 +153,20 @@ impl FirebaseClient {
         };
 
         // Encode JWT
-        let key = EncodingKey::from_rsa_pem(self.service_account.private_key.as_bytes())?;
+        // Support both normal PEM newlines and escaped "\\n" format from some deploy setups.
+        let key = match EncodingKey::from_rsa_pem(self.service_account.private_key.as_bytes()) {
+            Ok(key) => key,
+            Err(original_err) => {
+                let normalized_private_key = self
+                    .service_account
+                    .private_key
+                    .replace("\\r\\n", "\n")
+                    .replace("\\n", "\n");
+
+                EncodingKey::from_rsa_pem(normalized_private_key.as_bytes())
+                    .map_err(|_| anyhow!("Invalid Firebase private_key format: {}", original_err))?
+            }
+        };
         let jwt = encode(&Header::new(Algorithm::RS256), &claims, &key)?;
 
         // Exchange JWT for access token
