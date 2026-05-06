@@ -1,6 +1,7 @@
 target/
 **/*.rs.bk
 .env
+.env.vps
 firebase-key.json
 .vscode/
 .idea/
